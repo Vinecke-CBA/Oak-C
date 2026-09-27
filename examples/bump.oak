@@ -1,0 +1,14 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn bump(p: Point) {
+    p.x = p.x + 1;
+}
+
+fn main() {
+    var p = Point { x: 1, y: 2 };
+    bump(p);
+    print(p.x);
+}

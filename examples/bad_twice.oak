@@ -1,0 +1,12 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn f(a: Point, b: Point) {
+}
+
+fn main() {
+    var p = Point { x: 1, y: 2 };
+    f(p, p);
+}

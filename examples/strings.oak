@@ -1,0 +1,50 @@
+// Strings: dynamic, immutable, Python-ish. No length to declare.
+
+struct Greeting {
+    who: string,
+    times: i32,
+}
+
+fn greet(name: string, times: i32) {
+    var i = 0;
+    while i < times {
+        print("Hello, " + name + "!");
+        i = i + 1;
+    }
+}
+
+fn shout(s: string) -> string {
+    return s + "!!!";
+}
+
+fn main() {
+    var name = "world";
+    var msg = "Hello, " + name;
+    print(msg);
+
+    shout(msg);
+    print(shout(msg));
+
+    greet("Oak", 2);
+
+    if name == "world" {
+        print("matched");
+    }
+    if name != "moon" {
+        print("not the moon");
+    }
+
+    // Strings can live in struct fields.
+    var g = Greeting { who: "Ana", times: 1 };
+    print(g.who);
+
+    // Escapes work like C/Python.
+    print("tab\there");
+    print("quote \" inside");
+    print("backslash \\ and newline:\nsecond line");
+
+    // Empty string and assignment.
+    var s = "";
+    s = "replaced";
+    print(s);
+}

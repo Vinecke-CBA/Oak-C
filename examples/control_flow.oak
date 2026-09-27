@@ -1,0 +1,44 @@
+// Control flow.
+//
+// A `{` directly after an `if` / `while` condition always starts the body,
+// even when the condition ends in a name or a field. That means a struct
+// literal inside a condition needs parentheses:
+//
+//     if counter.n == 0 { ... }        // ok: block
+//     if (Counter { n: 5 }).n == 5 { } // ok: parenthesised literal
+
+struct Counter {
+    n: i32,
+}
+
+fn countdown(c: Counter) {
+    while c.n > 0 {
+        c.n = c.n - 1;
+    }
+}
+
+fn main() {
+    var c = Counter { n: 3 };
+    countdown(c);
+    print(c.n);            // 0
+
+    var done = false;
+    if !done {
+        print(1);          // 1
+    }
+    if c.n == 0 && !done {
+        print(2);          // 2
+    } else {
+        print(-1);
+    }
+
+    var i = 0;
+    while i < 3 {
+        print(i);          // 0 1 2
+        i = i + 1;
+    }
+
+    if (Counter { n: 5 }).n == 5 {
+        print(3);          // 3
+    }
+}

@@ -1,0 +1,180 @@
+// Oak wrapper for raylib (window, timing, 2D drawing, input, basic 3D).
+// Uses only existing Oak FFI: `include`, `extern fn`, `f64`, `ptr`.
+// No compiler or language changes.
+//
+// Design: Oak emits its own `extern` prototype
+// per `extern fn` with Oak's C types, which would collide with raylib.h
+// (float vs double, Vector3/Color by value...). So Oak only declares the
+// `oak_rl_*` wrappers from raylib_shim.h; the shim calls real raylib.
+//
+// Build:
+//   oakc examples/raylib/demo_spin.oak -o demo_spin \
+//        -- examples/raylib/raylib_shim.c -lraylib -lgdi32 -lwinmm -lm
+
+include "raylib_shim.h";
+
+// --- window / timing ---
+extern fn oak_rl_window(w: i32, h: i32, title: string);
+extern fn oak_rl_close();
+extern fn oak_rl_should_close() -> i32;
+extern fn oak_rl_target_fps(fps: i32);
+extern fn oak_rl_frame_time() -> f64;
+extern fn oak_rl_time() -> f64;
+
+// --- 2D drawing ---
+extern fn oak_rl_begin();
+extern fn oak_rl_end();
+extern fn oak_rl_clear(r: i32, g: i32, b: i32, a: i32);
+extern fn oak_rl_text(s: string, x: i32, y: i32, size: i32, r: i32, g: i32, b: i32, a: i32);
+extern fn oak_rl_rect(x: i32, y: i32, w: i32, h: i32, r: i32, g: i32, b: i32, a: i32);
+extern fn oak_rl_circle(cx: i32, cy: i32, radius: f64, r: i32, g: i32, b: i32, a: i32);
+extern fn oak_rl_line(x0: i32, y0: i32, x1: i32, y1: i32, r: i32, g: i32, b: i32, a: i32);
+extern fn oak_rl_fps(x: i32, y: i32);
+
+// --- input ---
+extern fn oak_rl_key_down(key: i32) -> i32;
+extern fn oak_rl_key_pressed(key: i32) -> i32;
+extern fn oak_rl_mouse_x() -> i32;
+extern fn oak_rl_mouse_y() -> i32;
+extern fn oak_rl_mouse_pressed(button: i32) -> i32;
+extern fn oak_rl_mouse_wheel() -> f64;
+
+// --- 3D ---
+extern fn oak_rl_cam_new(px: f64, py: f64, pz: f64, tx: f64, ty: f64, tz: f64, fovy: f64) -> ptr;
+extern fn oak_rl_cam_free(cam: ptr);
+extern fn oak_rl_begin_3d(cam: ptr);
+extern fn oak_rl_end_3d();
+extern fn oak_rl_grid(slices: i32, spacing: f64);
+extern fn oak_rl_cube(x: f64, y: f64, z: f64, w: f64, h: f64, l: f64, r: i32, g: i32, b: i32, a: i32);
+extern fn oak_rl_cube_wires(x: f64, y: f64, z: f64, w: f64, h: f64, l: f64, r: i32, g: i32, b: i32, a: i32);
+extern fn oak_rl_cube_spin(w: f64, h: f64, l: f64, angle: f64, ax: f64, ay: f64, az: f64, r: i32, g: i32, b: i32, a: i32);
+extern fn oak_rl_sphere(x: f64, y: f64, z: f64, radius: f64, r: i32, g: i32, b: i32, a: i32);
+
+// ---------------- friendly Oak API ----------------
+
+fn rl_window(w: i32, h: i32, title: string) {
+    oak_rl_window(w, h, title);
+}
+
+fn rl_close() {
+    oak_rl_close();
+}
+
+fn rl_should_close() -> bool {
+    return oak_rl_should_close() != 0;
+}
+
+fn rl_target_fps(fps: i32) {
+    oak_rl_target_fps(fps);
+}
+
+fn rl_frame_time() -> f64 {
+    return oak_rl_frame_time();
+}
+
+fn rl_time() -> f64 {
+    return oak_rl_time();
+}
+
+fn rl_begin() {
+    oak_rl_begin();
+}
+
+fn rl_end() {
+    oak_rl_end();
+}
+
+fn rl_clear(r: i32, g: i32, b: i32) {
+    oak_rl_clear(r, g, b, 255);
+}
+
+fn rl_text(s: string, x: i32, y: i32, size: i32, r: i32, g: i32, b: i32) {
+    oak_rl_text(s, x, y, size, r, g, b, 255);
+}
+
+fn rl_rect(x: i32, y: i32, w: i32, h: i32, r: i32, g: i32, b: i32) {
+    oak_rl_rect(x, y, w, h, r, g, b, 255);
+}
+
+fn rl_circle(cx: i32, cy: i32, radius: f64, r: i32, g: i32, b: i32) {
+    oak_rl_circle(cx, cy, radius, r, g, b, 255);
+}
+
+fn rl_line(x0: i32, y0: i32, x1: i32, y1: i32, r: i32, g: i32, b: i32) {
+    oak_rl_line(x0, y0, x1, y1, r, g, b, 255);
+}
+
+fn rl_fps(x: i32, y: i32) {
+    oak_rl_fps(x, y);
+}
+
+fn rl_key_down(key: i32) -> bool {
+    return oak_rl_key_down(key) != 0;
+}
+
+fn rl_key_pressed(key: i32) -> bool {
+    return oak_rl_key_pressed(key) != 0;
+}
+
+fn rl_mouse_x() -> i32 {
+    return oak_rl_mouse_x();
+}
+
+fn rl_mouse_y() -> i32 {
+    return oak_rl_mouse_y();
+}
+
+fn rl_mouse_pressed(button: i32) -> bool {
+    return oak_rl_mouse_pressed(button) != 0;
+}
+
+fn rl_mouse_wheel() -> f64 {
+    return oak_rl_mouse_wheel();
+}
+
+fn rl_camera(px: f64, py: f64, pz: f64, tx: f64, ty: f64, tz: f64, fovy: f64) -> ptr {
+    return oak_rl_cam_new(px, py, pz, tx, ty, tz, fovy);
+}
+
+fn rl_camera_free(cam: ptr) {
+    oak_rl_cam_free(cam);
+}
+
+fn rl_begin_3d(cam: ptr) {
+    oak_rl_begin_3d(cam);
+}
+
+fn rl_end_3d() {
+    oak_rl_end_3d();
+}
+
+fn rl_grid(slices: i32, spacing: f64) {
+    oak_rl_grid(slices, spacing);
+}
+
+fn rl_cube(x: f64, y: f64, z: f64, w: f64, h: f64, l: f64, r: i32, g: i32, b: i32) {
+    oak_rl_cube(x, y, z, w, h, l, r, g, b, 255);
+}
+
+fn rl_cube_wires(x: f64, y: f64, z: f64, w: f64, h: f64, l: f64, r: i32, g: i32, b: i32) {
+    oak_rl_cube_wires(x, y, z, w, h, l, r, g, b, 255);
+}
+
+// Spin a cube around axis (ax,ay,az) by angle degrees, centered at origin.
+fn rl_cube_spin(w: f64, h: f64, l: f64, angle: f64, ax: f64, ay: f64, az: f64, r: i32, g: i32, b: i32) {
+    oak_rl_cube_spin(w, h, l, angle, ax, ay, az, r, g, b, 255);
+}
+
+fn rl_sphere(x: f64, y: f64, z: f64, radius: f64, r: i32, g: i32, b: i32) {
+    oak_rl_sphere(x, y, z, radius, r, g, b, 255);
+}
+
+// raylib key codes (subset) and mouse buttons.
+fn rl_key_escape() -> i32 { return 256; }
+fn rl_key_space() -> i32 { return 32; }
+fn rl_key_left() -> i32 { return 263; }
+fn rl_key_right() -> i32 { return 262; }
+fn rl_key_arrow_up() -> i32 { return 265; }
+fn rl_key_arrow_down() -> i32 { return 264; }
+fn rl_mouse_left() -> i32 { return 0; }
+fn rl_mouse_right() -> i32 { return 1; }

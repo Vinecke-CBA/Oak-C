@@ -1,0 +1,54 @@
+// Rotating 3D object demo: a spinning cube + a sphere orbiting it,
+// on a grid, with a fixed camera. Close the window or press Escape.
+//
+// Build:
+//   oakc examples/raylib/demo_spin.oak -o demo_spin -- examples/raylib/raylib_shim.c -lraylib -lgdi32 -lwinmm -lm
+// Run:
+//   demo_spin
+import "raylib.oak";
+include "math.h";
+
+extern fn cos(x: f64) -> f64;
+extern fn sin(x: f64) -> f64;
+
+fn main() {
+    rl_window(960, 540, "oak + raylib: rotating cube");
+    rl_target_fps(60);
+    var cam = rl_camera(6.0, 5.0, 6.0, 0.0, 1.0, 0.0, 45.0);
+    var running = true;
+    while running {
+        if rl_should_close() {
+            running = false;
+        }
+        if rl_key_pressed(rl_key_escape()) {
+            running = false;
+        }
+        var t = rl_time();
+
+        rl_begin();
+        rl_clear(24, 26, 38);
+        rl_begin_3d(cam);
+        rl_grid(10, 1.0);
+
+        // Spinning cube around a tilted axis.
+        var spin = t * 60.0;
+        rl_cube_spin(2.0, 2.0, 2.0, spin, 0.3, 1.0, 0.4, 86, 156, 214);
+
+        // Sphere orbiting the cube.
+        var ang = t * 1.5;
+        var sx = cos(ang) * 3.5;
+        var sz = sin(ang) * 3.5;
+        rl_sphere(sx, 1.0, sz, 0.5, 224, 108, 117);
+
+        // A static pedestal cube.
+        rl_cube(0.0, -1.0, 0.0, 4.0, 0.3, 4.0, 60, 60, 70);
+        rl_end_3d();
+
+        rl_text("Esc or close window to quit", 10, 10, 20, 220, 220, 230);
+        rl_text("cube spins, sphere orbits", 10, 36, 20, 150, 150, 170);
+        rl_fps(10, 510);
+        rl_end();
+    }
+    rl_camera_free(cam);
+    rl_close();
+}

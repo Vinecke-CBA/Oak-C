@@ -1,0 +1,86 @@
+// Simple Oak speed benchmark.
+// Build: oakc examples/bench/bench.oak -o bench
+// (Windows tick counter via GetTickCount; scalar code == gcc -O2 C.)
+
+extern fn GetTickCount() -> i32;
+
+fn fib(n: i32) -> i32 {
+    if n < 2 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn main() {
+    var t0 = GetTickCount();
+
+    var f = fib(30);
+    print(f);
+    var t1 = GetTickCount();
+    print(t1 - t0);
+
+    // integer loop
+    t0 = GetTickCount();
+    var s = 0;
+    var i = 0;
+    while i < 500000000 {
+        s = (s + i * 3 - 1) % 1000000007;
+        i = i + 1;
+    }
+    print(s);
+    t1 = GetTickCount();
+    print(t1 - t0);
+
+    // float loop
+    t0 = GetTickCount();
+    var x = 1.0;
+    var j = 0;
+    while j < 100000000 {
+        x = x * 1.0000001 + 0.5;
+        if x > 100000.0 {
+            x = 1.0;
+        }
+        j = j + 1;
+    }
+    print(x);
+    t1 = GetTickCount();
+    print(t1 - t0);
+
+    // array: push 1e6, then index-scan x10
+    t0 = GetTickCount();
+    var a: i32[] = [];
+    var k = 0;
+    while k < 1000000 {
+        push(a, k);
+        k = k + 1;
+    }
+    var sum = 0;
+    var rep = 0;
+    while rep < 10 {
+        var k2 = 0;
+        while k2 < len(a) {
+            sum = sum + a[k2] / 100000;
+            k2 = k2 + 1;
+        }
+        rep = rep + 1;
+    }
+    print(sum);
+    t1 = GetTickCount();
+    print(t1 - t0);
+
+    // strings: concat + compare (allocates each round)
+    t0 = GetTickCount();
+    var str = "";
+    var hits = 0;
+    var m = 0;
+    while m < 300000 {
+        str = "ab" + "cd";
+        if str == "abcd" {
+            hits = hits + 1;
+        }
+        m = m + 1;
+    }
+    print(hits);
+    t1 = GetTickCount();
+    print(t1 - t0);
+}

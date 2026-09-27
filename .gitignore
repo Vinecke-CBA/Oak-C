@@ -1,0 +1,26 @@
+# Compiled Oak programs and the compiler itself.
+# Patterns are root-anchored (leading /) so they only ever match build
+# outputs at the repo root — never a same-named source dir like examples/bench/.
+*.exe
+/oakc
+/a.out
+/a.exe
+/hello
+/bump
+/copy_ok
+/control_flow
+/strings
+/bad_twice
+/demo_spin
+/bench
+
+# C emitted by the compiler (<input>.oak.c) and object files
+*.oak.c
+*.o
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

@@ -1,0 +1,15 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn f(a: Point, b: Point) {
+    print(a.x);
+    print(b.x);
+}
+
+fn main() {
+    var p = Point { x: 1, y: 2 };
+    var q = p;
+    f(p, q);
+}

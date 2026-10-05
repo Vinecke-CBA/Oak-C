@@ -1,0 +1,53 @@
+{
+  "//": "Copy this file to .vscode/tasks.json in your Oak project (or in this repo) to get Ctrl+Shift+B. Requires oakc on PATH.",
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "oak: build current file",
+      "type": "process",
+      "command": "oakc",
+      "args": [
+        "${file}",
+        "-o",
+        "${fileDirname}/${fileBasenameNoExtension}"
+      ],
+      "problemMatcher": "$gcc",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "oak: build current file (link flags after --)",
+      "type": "process",
+      "command": "oakc",
+      "args": [
+        "${file}",
+        "-o",
+        "${fileDirname}/${fileBasenameNoExtension}",
+        "--",
+        "-lm"
+      ],
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "oak: build with a C shim (edit the paths)",
+      "type": "process",
+      "command": "oakc",
+      "args": [
+        "${file}",
+        "-o",
+        "${fileDirname}/${fileBasenameNoExtension}",
+        "--",
+        "shim/shim.c",
+        "-Ishim",
+        "-lmylib"
+      ],
+      "problemMatcher": "$gcc"
+    }
+  ]
+}

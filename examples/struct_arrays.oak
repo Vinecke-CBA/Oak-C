@@ -1,0 +1,29 @@
+// Push values (literals and variables) into struct arrays, read them back
+// through indexing, and mutate fields through slots. This used to generate
+// &(T){ ((T){...}) }, which gcc rejects.
+
+struct Pair {
+    x: i32,
+    y: i32,
+}
+
+fn main() {
+    var ps: Pair[] = [];
+    push(ps, Pair { x: 1, y: 2 });
+    var p = Pair { x: 3, y: 4 };
+    push(ps, p);
+    ps[0].x = ps[0].x + 10;
+    ps[-1].y = 40;
+    print(len(ps));
+    print(ps[0].x);
+    print(ps[0].y);
+    print(ps[1].x);
+    print(ps[1].y);
+    var tot = 0;
+    var i = 0;
+    while i < len(ps) {
+        tot = tot + ps[i].x + ps[i].y;
+        i = i + 1;
+    }
+    print(tot);
+}

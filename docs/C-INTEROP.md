@@ -17,6 +17,7 @@ C library directly. This guide goes from "call `printf`" to "wrap SDL2 like
 9. [Linking: forwarding flags to gcc](#9-linking-forwarding-flags-to-gcc)
 10. [Debugging FFI problems](#10-debugging-ffi-problems)
 11. [Shim authoring checklist](#11-shim-authoring-checklist)
+12. [Memory: ptr, defer and include/memory.oak](#12-memory-ptr-defer-and-includememoryoak)
 
 ---
 
@@ -45,25 +46,35 @@ avoid them:
 
 | Oak type | Emitted C | Use for |
 | --- | --- | --- |
+| `i8` `u8` | `int8_t` `uint8_t` | bytes, small flags |
+| `i16` `u16` | `int16_t` `uint16_t` | 16-bit C types |
 | `i32` | `int32_t` | `int`, `Uint32`-as-value, flags, counts, bool-like C ints |
+| `u32` | `uint32_t` | `unsigned`, `size_t` on 32-bit, bit masks |
+| `i64` | `int64_t` | `long long`, `int64_t`, sizes and timestamps |
+| `u64` | `uint64_t` | `size_t` on 64-bit, `uint64_t`, full-range masks |
 | `f64` | `double` | `double`; **not** `float` (declare shim or accept promotion) |
 | `bool` | `bool` (`<stdbool.h>`) | `_Bool` returns; C's `int` bools better as `i32` |
 | `string` | `const char *` (typedef `OakStr`) | `const char *` params — string **literals pass fine** |
-| `ptr` | `void *` | Any C pointer/handle; compare with `null` |
+| `ptr` / `ptr<T>` | `void *` | Any C pointer/handle; compare with `null` |
 | `()` return | `void` | Functions whose return you ignore |
-| `C "text"` | `text` verbatim | Everything else: `char *`, `float`, `long long`, `size_t`, `SDL_Renderer *`... |
+| `C "text"` | `text` verbatim | Everything else: `char *`, `float`, `struct Foo *`, ... |
 
 Rules:
 
 - **Structs and arrays cannot cross the boundary.** `extern fn` params and
-  returns must be *scalarish*: `i32 f64 bool string ptr C"..."`.
+  returns must be *scalarish*: any integer type, `f64`, `bool`, `string`,
+  `ptr`, `C"..."`.
   (`extern fn parameters must be scalars...`)
+- **Every pointer is `void *` in the header too.** Oak has exactly one pointer
+  spelling, so a C prototype that says `const void *` or `int32_t *` will not
+  match the `extern` declaration Oak emits and C will reject the mismatch.
+  Take a narrower `T *` in a `oak_*` shim instead, and hand Oak a `ptr`.
+- Numbers convert to each other implicitly (C's usual arithmetic
+  conversions), so a `u32` argument satisfies a `C "size_t"` parameter in the
+  generated C. Only literals are range-checked.
 - `f64` is `double`. If the C function takes `float`, either declare the
   param `C "float"` (only usable as param/return text) or shim it with a
   `double`-taking wrapper.
-- An **int literal** automatically converts where `f64` is expected, so
-  `extern fn sdl_delay(ms: i32)`-style calls and float args both accept
-  plain literals.
 - Strings handed *into* C must not be mutated — Oak string literals are
   `const char *`; a C function that writes into them is UB. Copy first
   (via shim) if a library needs a mutable buffer.
@@ -72,14 +83,48 @@ Rules:
   keep it after the next call. If it returns malloc'd memory, Oak won't
   free it — call `free` yourself via `extern fn` if it matters.
 
-## 3. `include` — pulling in headers
+## 3. `include` — pulling in headers and C sources
+
+`include` has three forms:
 
 ```oak
+// 1. C header emitted in generated C file
 include "stdio.h";      // -> #include <stdio.h>
 include "math.h";       // -> #include <math.h>
-include "my_shim.h";    // -> #include <my_shim.h>  (see below!)
+
+// 2. C source file compiled & linked automatically (no -- compiler flags required!)
+include "example.c" as extern C;
+
+// 3. Oak module imported safely (alias for `import "example.oak";`)
+include "example.oak" as Oak;
 ```
 
+### Where these names are searched
+
+All three forms — and `import` — resolve names in the same order, first hit
+wins:
+
+1. next to the file that contains the statement
+2. the current working directory
+3. every `-I<dir>` passed to `oakc` (command line or `flags` in `oak.cfg`)
+4. `include/` next to the input file
+5. `include/` in the working directory
+6. `include/` next to the `oakc` executable
+
+Directories that do not exist are skipped, so a project without an
+`include/` folder behaves exactly as it did before. Steps 3-6 are also
+handed to the C compiler as `-I`, which is what lets a bare header name
+work with no flags at all:
+
+```sh
+# include/mylib.h, include/mylib.c and include/util.oak all exist
+oakc app.oak -o app        # -Iinclude is added to the gcc line for you
+```
+
+Keep shared project files in `include/` and the command line stays clean.
+See `include/README.md` and `examples/include_dir.oak`.
+
+### Form 1: `include "header.h";`
 - Emitted **once**, de-duplicated, at the top of the generated C file,
   after the compiler's own six includes (`stdio stdint stdlib string
   limits stdbool` — so `printf`, `malloc`, `memcpy` already exist without
@@ -91,10 +136,23 @@ include "my_shim.h";    // -> #include <my_shim.h>  (see below!)
     it's your file!** Angle includes only search `-I` paths, so you must
     pass `-Ipath/to/dir` on the gcc line (§9). Alternatively give the
     include a path form: `include "./raylib_shim.h";` keeps quotes and
-    resolves relative to the generated `.c` file's directory.
+    resolves relative to the generated `.c` file's directory. A header in
+    the project's `include/` needs no flag at all: `-Iinclude` is added
+    for you automatically.
 - `include` also has **no effect on Oak itself** — it is purely a C
   preprocessor directive for the generated file. Types from the header
   are unknown to Oak unless you use raw `C "..."` spellings.
+
+### Form 2: `include "file.c" as extern C;`
+- Resolved relative to the including Oak file (or CWD), then the include
+  search path: every `-I<dir>` and the project `include/` folder.
+- Automatically compiled and linked with the program by the C compiler (GCC, TCC, Clang).
+- Deduplicated via canonical path resolution across all files in the project.
+- No manual compiler command-line flags or `--` arguments needed.
+
+### Form 3: `include "file.oak" as Oak;`
+- Exactly equivalent to `import "file.oak";`.
+- Cycle-safe: circular inclusions (e.g. A includes B, B includes A) terminate cleanly and deduplicate definitions via canonical paths.
 
 ## 4. `extern fn` — declaring functions
 
@@ -370,12 +428,30 @@ Common recipes:
 
 | Goal | Build line tail |
 | --- | --- |
-| libm | `-- -lm` |
+| libm | `-- -lm` (gcc/clang; **not** TCC on Windows — it has no separate libm) |
 | shim source + header dir + lib | `-- mylib_shim.c -Ipath/to/dir -lmylib` |
 | SDL2 (MinGW) | `-- mylib/mylib_shim.c -Imylib -lSDL2` |
 | raylib (MinGW) | `-- examples/raylib/raylib_shim.c -Iexamples/raylib -lraylib -lgdi32 -lwinmm -lm` |
 | pkg-config flags | `-- $(pkg-config --cflags --libs foo)` (shell expands first) |
 | debuggable build | `oakc p.oak --emit-c p.c` then edit/compile manually |
+| TinyCC | `oakc p.oak -o p --cc tcc -- mylib_shim.c -Imylib` |
+
+The last row is the same shim workflow with the bundled TCC as the backend
+(`--cc tcc`, or `cc = tcc` in `oak.cfg`). Verified working: the generated C,
+libc, and shim `.c` files that use standard headers — that is everything on
+this page except third-party link libraries.
+
+Measured TCC limits (not guesses):
+
+- **No separate libm on Windows** — `-lm` fails with `library 'm' not found`.
+- **MinGW-built archives are unreadable** — linking a MinGW `libraylib.a`
+  gives `error: invalid object file`. Keep gcc for such a project, or build
+  the library from source with TCC.
+- **MinGW's header tree breaks TCC** — adding `-IC:/msys64/mingw64/include`
+  makes TCC pick up GCC-only CRT headers, which hard-error with
+  `#error VARARGS not implemented for this compiler`. Point `-I` at a
+  directory containing just the library's own headers instead: raylib's
+  `raylib.h` + `rlgl.h` + `raymath.h` then compile cleanly under TCC.
 
 Details that bite:
 
@@ -444,5 +520,56 @@ Before calling a wrapper done:
 - [ ] Demo exercises: init → one frame/call → cleanup path; compile with
       `--emit-c` once to eyeball the generated prototypes.
 
-Follow this and any C library — from `libc` to SDL, raylib, zlib, curl or
-OpenGL — becomes an Oak dependency with zero compiler changes.
+## 12. Memory: `ptr`, `defer` and `include/memory.oak`
+
+The FFI needs somewhere to put bytes, and C libraries hand back pointers to
+their own data. Oak has both halves of that:
+
+```oak
+var x: i32 = 42;
+var p: ptr = ptr(x);   // ptr(x)  ->  &x      (emitted as void * = (&x);)
+print(defer(p));        // defer(p) -> *x      (emitted as (*(int32_t *)(p)))
+defer(p) = 7;           // and it is a place, so it can be assigned
+```
+
+A bare `ptr` is a `void *`: it accepts and returns any C pointer, which is
+what makes it usable straight from `extern fn`. `ptr<T>` additionally records
+the pointee so `defer` knows what to load; the type is written out at each
+`defer` in the generated C, and `defer(p) = v` emits
+`(*(int32_t *)(p)) = v`.
+
+What is deliberately missing: pointer arithmetic (`p + 1`), `&x` as an
+operator, and dereferencing a bare `ptr`. Offsets are the C side's job.
+
+### include/memory.oak
+
+`include/memory.oak` is a ready-made library built on exactly that, and it
+pulls in its own C implementation, so one import is all a program needs:
+
+```oak
+import "memory.oak";
+
+var buf: ptr = mem_alloc(8);      // malloc, with the size remembered
+if mem_is_null(buf) { return; }   // null is the failure signal
+mem_write(buf, 0, 64, 1234567890123);
+print(mem_read(buf, 0, 64));      // 1234567890123
+print(mem_read(buf, 8, 64));      // -1: past the end, not a crash
+mem_free(buf);                    // null-safe, so cleanup needs no guard
+```
+
+The three files are the usual interop trio:
+
+| File | Role |
+| --- | --- |
+| `include/memory.h` | prototypes, written in the exact types Oak emits (`void *`, `uint64_t`, ...) |
+| `include/memory.c` | the implementation: a header-per-block allocator, bounds-checked cell reads/writes, and an opaque growable buffer |
+| `include/memory.oak` | the Oak API (`mem_*`, `buf_*`, `swap_i64`) and the `extern fn` declarations |
+
+Because each block remembers its own size, `mem_size` is exact and
+`mem_read`/`mem_write` can refuse an out-of-range cell instead of trusting the
+offset � the one place where a memory library can be honest about safety
+while still being a thin wrapper.
+
+`examples/memory_ptr.oak` exercises all of it: blocks, pointers into Oak
+variables, the wide integer types, and the buffer handle.
+

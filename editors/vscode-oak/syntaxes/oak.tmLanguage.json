@@ -1,0 +1,168 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Oak",
+  "scopeName": "source.oak",
+  "fileTypes": ["oak"],
+  "patterns": [
+    { "include": "#import-path" },
+    { "include": "#strings" },
+    { "include": "#comments" },
+    { "include": "#declarations" },
+    { "include": "#types" },
+    { "include": "#pointer-ops" },
+    { "include": "#keywords" },
+    { "include": "#builtins" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "import-path": {
+      "match": "\\b(import|include)\\b\\s*(\"(?:[^\"\\\\]|\\\\.)*\")(\\s+as\\s+(extern\\s+C|Oak))?",
+      "captures": {
+        "1": { "name": "keyword.control.import.oak" },
+        "2": { "name": "string.unquoted.path.oak" },
+        "3": { "name": "keyword.other.oak" }
+      }
+    },
+    "strings": {
+      "name": "string.quoted.double.oak",
+      "match": "\"(?:[^\"\\\\]|\\\\.)*\""
+    },
+    "comments": {
+      "name": "comment.line.double-slash.oak",
+      "match": "//.*$"
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(extern)\\s+(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.oak" },
+            "2": { "name": "keyword.control.oak" },
+            "3": { "name": "entity.name.function.oak" }
+          }
+        },
+        {
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.oak" },
+            "2": { "name": "entity.name.function.oak" }
+          }
+        },
+        {
+          "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.oak" },
+            "2": { "name": "entity.name.type.oak" }
+          }
+        },
+        {
+          "match": "\\b(var)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.oak" },
+            "2": { "name": "variable.other.oak" }
+          }
+        },
+        {
+          "match": "([A-Za-z_][A-Za-z0-9_]*)\\s*(:)(?!:)",
+          "captures": {
+            "1": { "name": "variable.other.property.oak" },
+            "2": { "name": "punctuation.separator.oak" }
+          }
+        },
+        {
+          "name": "punctuation.separator.range.oak",
+          "match": "\\.\\."
+        },
+        {
+          "match": "(?<![A-Za-z0-9_])(?!(?:if|else|while|for|in|return|fn|struct|var|extern|import|include|ptr|defer|print|len|push|true|false|null)\\b)([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.oak" },
+            "2": { "name": "punctuation.section.parens.oak" }
+          }
+        }
+      ]
+    },
+    "pointer-ops": {
+      "patterns": [
+        {
+          "name": "support.function.pointer.oak",
+          "match": "\\b(ptr|defer)\\b(?=\\s*\\()"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.oak",
+          "match": "\\b(i8|u8|i16|u16|i32|u32|i64|u64|f64|bool|string|ptr)\\b"
+        },
+        {
+          "name": "storage.modifier.oak",
+          "match": "\\bC\\b(?=\\s+\")"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.oak",
+          "match": "\\b(if|else|while|for|in|return|struct|fn|var|extern|import|include|defer)\\b"
+        },
+        {
+          "name": "constant.language.oak",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.oak",
+          "match": "\\bnull\\b"
+        }
+      ]
+    },
+    "builtins": {
+      "name": "support.function.builtin.oak",
+      "match": "\\b(print|len|push)\\b(?=\\s*\\()"
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.oak",
+          "match": "\\b\\d[\\d_]*\\.\\d[\\d_]*\\b"
+        },
+        {
+          "name": "constant.numeric.hex.oak",
+          "match": "\\b0[xX][0-9a-fA-F][0-9a-fA-F_]*\\b"
+        },
+        {
+          "name": "constant.numeric.binary.oak",
+          "match": "\\b0[bB][01][01_]*\\b"
+        },
+        {
+          "name": "constant.numeric.integer.oak",
+          "match": "\\b\\d[\\d_]*\\b"
+        }
+      ]
+    },
+    "operators": {
+      "name": "keyword.operator.oak",
+      "match": "\\.\\.|->|\\.\\.\\.|==|!=|<=|>=|&&|\\|\\||[!+\\-*/%<>=]"
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.section.brackets.oak",
+          "match": "[()\\[\\]{}]"
+        },
+        {
+          "name": "punctuation.separator.oak",
+          "match": "[,;]"
+        },
+        {
+          "name": "punctuation.accessor.oak",
+          "match": "\\."
+        }
+      ]
+    }
+  }
+}

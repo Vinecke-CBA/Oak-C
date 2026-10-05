@@ -1,0 +1,52 @@
+{
+  "name": "oak",
+  "displayName": "Oak",
+  "description": "Syntax highlighting and editor support for the Oak language (Oak -> C -> native binary).",
+  "version": "0.2.0",
+  "publisher": "Vinecke-CBA",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "oak",
+    "language",
+    "compiler"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "oak",
+        "aliases": [
+          "Oak",
+          "oak"
+        ],
+        "extensions": [
+          ".oak"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "oak",
+        "scopeName": "source.oak",
+        "path": "./syntaxes/oak.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Oak",
+      "properties": {
+        "[oak]": {
+          "editor.tabSize": 4,
+          "editor.insertSpaces": true,
+          "editor.wordBasedSuggestions": "off"
+        }
+      }
+    }
+  }
+}

@@ -62,21 +62,25 @@ terminate statements — every statement ends with `;`.
 **Keywords** (cannot be used as identifiers):
 
 ```
-fn  struct  var  if  else  while  return  true  false  null
-i32  f64  bool  string  ptr  extern  import  include
+fn  struct  var  if  else  while  for  in  return  true  false  null
+i8  u8  i16  u16  i32  u32  i64  u64  f64  bool  string  ptr  defer
+extern  import  include
 ```
 
 `print`, `len` and `push` are *not* keywords — they are builtins recognized
 by name during typechecking (and you may not define `fn print(...)`).
 
-**Integer literals:** decimal digits only, `123`. No hex, octal, underscores
-or sign (write `-5` as unary minus). Literals are typed `i32`; there is **no
-overflow checking** — a literal larger than 2 147 483 647 compiles and
-silently truncates in C.
+**Integer literals:** decimal `123`, hex `0xFF`, binary `0b1010`, and `_` as a
+digit separator (`1_000_000`). No octal and no sign (write `-5` as unary
+minus). A literal is typed `i32` while it fits, `i64` up to `INT64_MAX`, and
+`u64` above that, so `0xFFFFFFFFFFFFFFFF` is exact. A literal that does not fit
+the type it is used as is an error (`literal 300 does not fit in u8`) rather
+than a silent wrap.
 
 **Float literals:** `1`, `1.5`, `0.0`. A dot must be followed by a digit
 (`1.` is a parse error). **No exponent notation** — `1e-4` does not lex;
-write `0.0001`.
+write `0.0001`. Two dots `..` lex as one *range* token (see §6), so `0..5` is
+three tokens (`0`, `..`, `5`) and a float range like `0.0..1.0` needs no spaces.
 
 **String literals:** `"..."` with escapes `\n \t \r \\ \"`. An unknown
 escape is a compile error (`unknown escape '\x'`), an unterminated literal is
@@ -90,6 +94,7 @@ through untouched (no Unicode handling in the language).
 ==  !=  <  >  <=  >=      comparison
 &&  ||  !                logic (bool only)
 =                        assignment (statements only)
+..                       inclusive range (`for` loops)
 .  ,  :  ;  (  )  {  }  [  ]  ->  ...   punctuation
 ```
 
@@ -100,11 +105,17 @@ There is **no** bitwise `& | ^ ~ << >>`, no `++/--`, no compound `+=`
 
 | Type | C equivalent | Literal | Notes |
 | --- | --- | --- | --- |
-| `i32` | `int32_t` | `42` | 32-bit signed. All integer math |
+| `i8` `u8` | `int8_t` `uint8_t` | `42` | Bytes, small counters, C `char`-ish values |
+| `i16` `u16` | `int16_t` `uint16_t` | `42` | 16-bit C types |
+| `i32` | `int32_t` | `42` | 32-bit signed. The default integer type |
+| `u32` | `uint32_t` | `42` | Unsigned C `unsigned`/masks |
+| `i64` | `int64_t` | `42` | 64-bit signed, for sizes and timestamps |
+| `u64` | `uint64_t` | `42` | Unsigned 64-bit; the widest type |
 | `f64` | `double` | `42.0` | IEEE-754 double |
 | `bool` | `bool` | `true` `false` | Only `if`/`while` conditions and logic ops |
 | `string` | `const char *` | `"hi"` | Immutable heap byte string (see §10) |
-| `ptr` | `void *` | `null` | Untyped pointer, **FFI only** (see C-INTEROP.md) |
+| `ptr` | `void *` | `null` | Untyped pointer; any C pointer/handle |
+| `ptr<T>` | `void *` | — | Pointer that remembers it points at `T` |
 | `T[]` | `OakArr *` | `[1, 2]` | Dynamic array of `T` (see §9) |
 | `struct` | `struct Name` | `Name { ... }` | See §8 |
 | `()` | `void` | — | "no value"; what functions without `->` return |
@@ -113,10 +124,32 @@ There is **no** bitwise `& | ^ ~ << >>`, no `++/--`, no compound `+=`
 **Unit `()`** cannot be stored: `var x = f();` where `f` returns `()`
 errors with `cannot store () in a variable`. `print(...)` returns `()`.
 
-**`ptr` and `null`:** `null` has type `ptr`. Comparing `p == null` is the
-idiom for handling failed C constructors. Oak never dereferences, allocates
-or does arithmetic on `ptr` — it exists purely to shuttle C pointers around;
-see C-INTEROP.md.
+**Pointers** come in two spellings, and both are the same C `void *`:
+
+```oak
+var x: i32 = 42;
+var a: ptr = ptr(x);        // void *: takes any pointer, returns any pointer
+var b: ptr<i32> = ptr(x);   // remembers the pointee, so defer() is typed
+```
+
+`ptr(x)` is Oak's address-of (`&x`) and `defer(p)` is its partner: the value
+stored at `p` (`*p`). Both work on any *place* — a variable, a struct field, an
+array element, or another `defer` — and `defer(p) = v` stores through the
+pointer, so two variables can be swapped without naming either value:
+
+```oak
+var lo: i64 = 1;
+var hi: i64 = 2;
+swap_i64(ptr(lo), ptr(hi));   // include/memory.oak
+print(lo);                    // 2
+print(hi);                    // 1
+```
+
+A bare `ptr` is a `void *`: it can be compared with `null` and passed to C,
+but `defer` on one is an error (`defer() needs to know what the pointer points
+at`) because there is nothing to load it as. `ptr<T>` fixes that by naming the
+pointee. In the generated C the pointee type is written at each `defer`, so
+`defer(p)` emits `(*(int32_t *)(p))`.
 
 **Raw types `C "..."`:** any C type spelling goes where a type is expected,
 quoted:
@@ -130,19 +163,24 @@ The text is pasted into the generated C untouched (so it must compile there).
 Raw values can be passed around but not operated on: no arithmetic, no
 comparison (the typechecker rejects `TY_RAW` in both).
 
-**`f64`/`i32` mixing:** arithmetic and comparisons may mix them; the result
-promotes to `f64` if either side is `f64` (C promotion does the work):
+**Numeric mixing:** any two integer types may be combined, and integers mix
+with `f64`. The result follows C's usual arithmetic conversions: `f64` wins
+outright, otherwise the wider type does, and a signed type beats an equally
+wide unsigned one.
 
 ```oak
-var x = 3 + 4.5;    // f64, 7.5
-if x > 4 { ... }    // ok
+var x = 3 + 4.5;          // f64, 7.5
+var big: u64 = 5;         // a literal fits any integer type it fits in
+var n: u32 = 7;  var m = n + 1;   // i32, by C's promotion
 ```
 
-**The one coercion:** an **integer literal** is accepted wherever `f64` is
-expected (the literal is retyped to `f64`, C converts it). This applies to
-variable initialisers with annotations, assignments, call arguments, `return`
-values, struct-literal fields and array elements. It applies to *nothing*
-else — a `var x: f64 = someI32;` is an error; only `42` works, not `x`.
+**Coercions:** a value of one numeric type is accepted wherever another
+numeric type is expected — variable initialisers with annotations,
+assignments, call arguments, `return` values, struct-literal fields and array
+elements — and the generated C performs the conversion, exactly as it would in
+hand-written C. Only *literals* are range-checked (`var x: u8 = 300;` is an
+error). No other conversion is implicit: `string` and `ptr` never convert to a
+number, and nothing converts to `bool`.
 
 **Equality (`==`/`!=`):** allowed when both sides have the same type,
 including `i32↔f64` mixed numerics (promotes), `bool`, `string` (compares
@@ -196,16 +234,17 @@ x = x + 1;             // plain assignment, no `:=`, no `+=`
 
 ### Arithmetic (`+ - * /`)
 
-- Both sides `i32` → `i32`; either side `f64` → `f64` (C promotion).
-- `/` truncates toward zero for `i32` (C semantics); `f64` is normal
-  division. **`i32` division by zero crashes the program** (C UB → hardware
+- Both sides must be numbers; integers of any width mix freely, and `f64`
+  wins the result type (C promotion).
+- `/` truncates toward zero for integers (C semantics); `f64` is normal
+  division. **Integer division by zero crashes the program** (C UB → hardware
   trap on most platforms).
-- Errors otherwise: `arithmetic needs i32 or f64, got X and Y`.
+- Errors otherwise: `arithmetic needs numbers, got X and Y`.
 
 ### `%` (modulo)
 
-`i32` only on both sides (`'%' requires i32`), C semantics (sign follows the
-dividend: `-7 % 3 == -1`).
+Integers only, any width (`'%' requires integer types`), C semantics (sign
+follows the dividend: `-7 % 3 == -1`). `f64` has no `%`.
 
 ### Comparison `< > <= >=`
 
@@ -293,9 +332,13 @@ yields `""`. The result is a newly allocated copy.
 
 ### Place expressions (assignment targets)
 
-Valid: `x`, `p.x` (whose base is a place), `a[i]` on **arrays**. Invalid:
-calls, literals, slices, string indexing, computed chains like `f().x`.
-Violation → `invalid assignment target`.
+Valid: `x`, `p.x` (whose base is a place), `a[i]` on **arrays**, and
+`defer(p)` on a typed pointer. Invalid: calls, literals, slices, string
+indexing, computed chains like `f().x`. Violation → `invalid assignment
+target`.
+
+`ptr(x)` is the address-of: it accepts any place and produces a pointer
+(`defer(p) = v` then writes through it). See §3.
 
 ## 6. Statements and control flow
 
@@ -304,6 +347,7 @@ var x = expr;           // declaration + init
 place = expr;           // assignment
 if cond { ... } else if cond { ... } else { ... }
 while cond { ... }
+for binding in iterable { ... }   // range or array — see below
 { ... }                 // bare block (opens a scope)
 expr;                   // expression statement (usually a call)
 return expr;            // from a value-returning function
@@ -311,11 +355,40 @@ return;                 // from a () function — see quirks
 ```
 
 - Conditions must be `bool`.
-- `if`/`while` bodies are blocks — no single-statement form, no semicolons
+- `if`/`while`/`for` bodies are blocks — no single-statement form, no semicolons
   around them.
-- There is **no `for`, `break`, `continue` or `switch`**. Emulate with
-  `while` + `bool` flags (see `examples/bench`), or recursion.
+- There is **no `break`, `continue` or `switch`**. Emulate early exit with a
+  loop condition + `bool` flags, or `return`, or recursion. (`for` itself
+  exists — see below.)
 - The `else` branch may chain `if` (`else if`) or hold a block.
+
+### `for` loops
+
+`for` iterates either an **inclusive range** (`start..end`) or an **array**:
+
+```oak
+for i in 0..5 { print(i); }        // 0 1 2 3 4 5   — the end bound is INCLUDED
+for t in 0.0..3.0 { print(t); }    // 0.0 1.0 2.0 3.0   (f64 steps by 1.0)
+for x in items { print(x); }       // every element of an array
+for [name, age] in users {         // pull named struct fields out of each element
+    print(name); print(age);
+}
+```
+
+- **`a..b` is inclusive** — it yields `a, a+1, …, b`. Unlike Rust (where `0..5`
+  stops at `4`), here `0..5` includes `5`. Both bounds must be the same numeric
+  kind — both `i32`, or both `f64` — and there is no custom step (`f64` ranges
+  advance by exactly `1.0`). An `i32` range counts with a 64-bit internal
+  counter, so `0..INT32_MAX` terminates instead of wrapping.
+- **Array iteration** (`for x in arr`) walks every element front to back. The
+  length is read fresh each step and elements load through the bounds-checked
+  accessor, so a bad index traps cleanly rather than corrupting memory.
+- **Destructuring** (`for [a, b, …] in arr`) requires `arr`'s element type to be
+  a struct holding every named field; each element's fields are bound to local
+  copies. Repeated names within one pattern are rejected.
+- A `for` is scoped sugar over `while`: range bounds are snapshotted once, the
+  loop variables are block-local copies living in the loop's **own** scope — so
+  sibling loops may freely reuse the same names.
 
 **Return rules:**
 
@@ -462,6 +535,13 @@ Rules:
   directory), then **relative to the importing file's directory**. For
   subdirectories use the relative form: `import "lib/util.oak";` inside
   `src/app.oak` finds `src/lib/util.oak`.
+- Otherwise the **include search path** is tried: every `-I<dir>` you passed
+  (command line or `flags` in `oak.cfg`), then `include/` next to the input
+  file, `include/` in the working directory, and `include/` next to the
+  `oakc` executable. Those folders are also passed to the C compiler as
+  `-I`, which is how `include "x.h";` finds a header in `include/` without
+  any flags. Directories that do not exist are skipped (see
+  `include/README.md` and `examples/include_dir.oak`).
 - Imports are **recursive** (an imported file's imports load too) and
   **load-once** (the same path is a no-op — cycles terminate, double
   definition cannot come from loading twice).
@@ -534,12 +614,15 @@ type_atom   = "i32" | "f64" | "bool" | "string" | "ptr"
             | IDENT                              (* struct name *)
             | "C" STRING ;                       (* raw C type *)
 
-stmt        = var_stmt | assign_stmt | if_stmt | while_stmt
+stmt        = var_stmt | assign_stmt | if_stmt | while_stmt | for_stmt
             | return_stmt | block | expr ";" ;
 var_stmt    = "var" IDENT [ ":" type ] "=" expr ";" ;
 assign_stmt = place "=" expr ";" ;
 if_stmt     = "if" expr block [ "else" ( if_stmt | block ) ] ;
 while_stmt  = "while" expr block ;
+for_stmt    = "for" for_binding "in" for_iter block ;
+for_binding = IDENT | "[" IDENT { "," IDENT } [ "," ] "]" ;   (* [ ] = struct destructure *)
+for_iter    = expr [ ".." expr ] ;                            (* ".." = inclusive range *)
 return_stmt = "return" [ expr ] ";" ;
 block       = "{" { stmt } "}" ;
 place       = IDENT | place "." IDENT | postfix "[" expr "]" ;
@@ -620,6 +703,11 @@ after the first error are normal.
 | `cannot compare T and U` / `cannot compare T values` | `== !=` mismatch, or array/raw/unit operands |
 | `&& and \|\| require bool` / `! requires bool` / `unary - requires i32 or f64` | Operand types |
 | `if condition must be bool` / `while condition must be bool` | No truthiness |
+| `for range needs i32 or f64 bounds` / `for range bounds must both be i32 or both be f64` | Non-numeric or mixed-kind range bounds |
+| `a range binds exactly one name, not [...]` | `for [a, b] in 0..5` |
+| `for needs an array or a range, got T` | Iterated value is neither |
+| `for [a, b, ...] needs an array of structs, got T` | Destructuring a non-struct array |
+| `duplicate name 'x' in for pattern` | Repeated name in one `[a, a]` pattern |
 | `return type mismatch: expected T, got U` | `return` expression type |
 | `function must return T` / `function 'f' must return T` | Value function lacks `return expr` |
 | `extern fn parameters must be scalars, but 'x' is T` / `extern fn cannot return T` | FFI type not scalar (see C-INTEROP.md) |
@@ -647,8 +735,11 @@ Things a careful programmer must know — current behaviour, not aspirations:
 
 **Control flow**
 
-- No `for`, `break`, `continue`, `switch`, `goto`. Use `while` + flags, or
-  recursion.
+- No `break`, `continue`, `switch`, `goto`. Use `for`/`while` conditions + flags,
+  or `return`, or recursion. (`for` exists — see §6.)
+- `for` ranges are **inclusive** of the end bound and `f64` ranges step by
+  exactly `1.0`; there is no custom step and no `break`/`continue`, so exit a
+  `for` early by testing a flag the enclosing condition checks, or `return`.
 - No early `return;` inside `fn main()`: the emitter writes a bare C
   `return;` into `int main(void)`, which gcc rejects
   (`'return' with no value...`). Structure main with `if/else` chains or a
@@ -696,7 +787,8 @@ that block (e.g. `sleep`) block the whole program.
   (`conflicting types`) — the fix is to declare `oak_*` shim names instead
   of the library's names.
 - `include "header.h"` with a bare name compiles as `#include <header.h>`,
-  so shim headers in your project need `-Ipath` on the gcc line.
+  so a shim header needs `-Ipath` on the gcc line, unless it lives in the
+  project's `include/` folder, which is passed as `-Iinclude` for you.
 
 **Emitter limitations**
 

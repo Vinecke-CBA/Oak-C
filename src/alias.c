@@ -111,6 +111,12 @@ static void walk_expr(Comp *c, Expr *e) {
     case EX_UNARY:
         walk_expr(c, e->un.e);
         break;
+    case EX_ADDR:
+        walk_expr(c, e->addr.e);
+        break;
+    case EX_DEREF:
+        walk_expr(c, e->deref.p);
+        break;
     }
 }
 
@@ -133,6 +139,15 @@ static void walk_stmt(Comp *c, Stmt *s) {
     case ST_WHILE:
         walk_expr(c, s->wh.cond);
         walk_stmt(c, s->wh.body);
+        break;
+    case ST_FORIN:
+        if (s->forin.is_range) {
+            walk_expr(c, s->forin.iter);
+            walk_expr(c, s->forin.hi);
+        } else {
+            walk_expr(c, s->forin.iter);
+        }
+        walk_stmt(c, s->forin.body);
         break;
     case ST_RETURN:
         if (s->ret.value) {

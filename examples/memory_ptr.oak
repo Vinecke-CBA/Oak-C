@@ -1,0 +1,149 @@
+// Pointers, the wider integer types, and the memory library in include/.
+//
+//   oakc examples/memory_ptr.oak -o memory_ptr && ./memory_ptr
+import "memory.oak";
+
+// Raw memory, allocated and sized in bytes, as a `ptr` (a C `void *`).
+fn blocks() {
+    print("--- blocks ---");
+
+    var buf: ptr = mem_alloc(8);
+    print("null? ");
+    print(mem_is_null(buf));
+    print("size: ");
+    print(mem_size(buf));
+
+    // Cells of 8, 16, 32 and 64 bits share one block.
+    mem_write(buf, 0, 8, 200);            // one byte
+    mem_write(buf, 2, 16, 40000);         // two bytes
+    mem_write(buf, 4, 32, 4000000000);    // four bytes
+    mem_write(buf, 8, 64, 1234567890123); // one past the end: dropped
+    print("8-bit cell:  ");
+    print(mem_read(buf, 0, 8));
+    print("16-bit cell: ");
+    print(mem_read(buf, 2, 16));
+    print("32-bit cell: ");
+    print(mem_read(buf, 4, 32));
+    print("past the end:");
+    print(mem_read(buf, 8, 64));
+
+    var bigger: ptr = mem_resize(buf, 16);
+    print("grown to: ");
+    print(mem_size(bigger));
+    mem_write(bigger, 8, 64, 1234567890123);
+    print("64-bit cell: ");
+    print(mem_read(bigger, 8, 64));
+
+    var zeros: ptr = mem_zeros(4, 4); // 16 bytes of zeroes
+    print("zeroed size: ");
+    print(mem_size(zeros));
+    mem_copy(zeros, bigger, 8);
+    print("copied equal: ");
+    print(mem_equal(zeros, bigger, 8));
+
+    mem_free(zeros);
+    mem_free(bigger); // the block that `buf` pointed at, now resized
+    mem_free(null);   // freeing null is a no-op, so cleanup needs no guard
+}
+
+// Values through pointers: ptr(x) takes an address, defer(p) reads or writes
+// the value stored there.
+fn through_pointers() {
+    print("--- through pointers ---");
+
+    var a: i32 = 42;
+    var a_ptr: ptr = ptr(a);   // a void * to a
+    print("defer(a_ptr): ");
+    print(defer(a_ptr));
+
+    defer(a_ptr) = 7;          // writing through the pointer changes a
+    print("a is now: ");
+    print(a);
+
+    // ptr<i32> remembers the pointee, so defer() is typed and can be declared.
+    var typed: ptr<i32> = ptr(a);
+    print("typed defer: ");
+    print(defer(typed));
+
+    // Pointers swap without either value ever being named.
+    var x: i64 = 11;
+    var y: i64 = 22;
+    swap_i64(ptr(x), ptr(y));
+    print("swapped: ");
+    print(x);
+    print(y);
+
+    // ... including pointers to pointers.
+    var one: i32 = 1;
+    var two: i32 = 2;
+    var p1: ptr<i32> = ptr(one);
+    var p2: ptr<i32> = ptr(two);
+    swap_ptr(ptr(p1), ptr(p2));
+    print("swapped pointees: ");
+    print(defer(p1));
+    print(defer(p2));
+
+    // Comparing against null is how a pointer is checked for emptiness.
+    var nothing: ptr = null;
+    print("null is null: ");
+    print(mem_is_null(nothing));
+    print("p1 is null:  ");
+    print(mem_is_null(p1));
+}
+
+// The wider integer types, and the C conversions that come with them.
+fn wide_ints() {
+    print("--- wide ints ---");
+
+    var tiny: u8 = 255;
+    var small: i16 = -32768;
+    var big: u32 = 4000000000;
+    var huge: u64 = 18000000000000000000;
+    var wide: i64 = -9000000000;
+
+    print(tiny);
+    print(small);
+    print(big);
+    print(huge);
+    print(wide);
+
+    // Mixed-width arithmetic promotes the way C does.
+    var sum: u64 = big + huge / 2;
+    print("promoted sum: ");
+    print(sum);
+
+    // A literal that does not fit its type is a mistake, not a wrap-around.
+    var fits: u16 = 65535;
+    print(fits);
+}
+
+// A growable list of 64 bit cells, opaque to Oak.
+fn buffers() {
+    print("--- buffers ---");
+
+    var cells: ptr = buf_new(2);
+    var i: i64 = 0;
+    while i < 5 {
+        buf_push(cells, i * 100);
+        i = i + 1;
+    }
+    print("length: ");
+    print(buf_len(cells));
+
+    i = 0;
+    while i < 5 {
+        print(buf_get(cells, i));
+        i = i + 1;
+    }
+
+    print("past the end: ");
+    print(buf_get(cells, 99));
+    buf_free(cells);
+}
+
+fn main() {
+    blocks();
+    through_pointers();
+    wide_ints();
+    buffers();
+}

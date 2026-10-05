@@ -33,16 +33,26 @@ typedef enum {
     TOK_VAR,
     TOK_IF,
     TOK_ELSE,
+    TOK_FOR,
+    TOK_IN,
     TOK_WHILE,
     TOK_RETURN,
     TOK_TRUE,
     TOK_FALSE,
     TOK_NULL,
+    TOK_I8,
+    TOK_U8,
+    TOK_I16,
+    TOK_U16,
     TOK_I32,
+    TOK_U32,
+    TOK_I64,
+    TOK_U64,
     TOK_F64,
     TOK_BOOL,
     TOK_STRTYPE,
     TOK_PTR,
+    TOK_DEREF,
     TOK_EXTERN,
     TOK_IMPORT,
     TOK_INCLUDE,
@@ -57,6 +67,7 @@ typedef enum {
     TOK_COLON,
     TOK_SEMI,
     TOK_DOT,
+    TOK_DOTDOT,
     TOK_ELLIPSIS,
     TOK_EQ,
     TOK_ARROW,
@@ -81,16 +92,36 @@ typedef struct {
     const char *ident;
     const char *sval;
     int64_t ival;
+    uint64_t uval; /* integer literal, exact for anything up to 2^64-1 */
     double fval;
     int line, col;
 } Token;
 
-typedef enum { TY_I32, TY_F64, TY_BOOL, TY_UNIT, TY_STRUCT, TY_STRING, TY_PTR, TY_RAW, TY_ARRAY } TypeKind;
+/* Integer kinds are kept contiguous (TY_I8 .. TY_U64) so type_is_int() and the
+   numeric-conversion rules can walk them as a block. */
+typedef enum {
+    TY_I8,
+    TY_U8,
+    TY_I16,
+    TY_U16,
+    TY_I32,
+    TY_U32,
+    TY_I64,
+    TY_U64,
+    TY_F64,
+    TY_BOOL,
+    TY_UNIT,
+    TY_STRUCT,
+    TY_STRING,
+    TY_PTR,
+    TY_RAW,
+    TY_ARRAY
+} TypeKind;
 
 typedef struct Type {
     TypeKind kind;
     int struct_id;
-    struct Type *elem; /* TY_ARRAY element type (arena allocated) */
+    struct Type *elem; /* TY_ARRAY element type, TY_PTR pointee (arena allocated) */
     const char *raw;   /* TY_RAW: C type text, emitted verbatim */
 } Type;
 
@@ -106,6 +137,8 @@ typedef enum {
     EX_CALL,
     EX_BIN,
     EX_UNARY,
+    EX_ADDR,
+    EX_DEREF,
     EX_ARRAY,
     EX_INDEX,
     EX_SLICE
@@ -119,6 +152,7 @@ struct Expr {
     int root_sym;
     union {
         int64_t ival;
+        uint64_t uval; /* literals above INT64_MAX live here, not in ival */
         double fval;
         bool bval;
         const char *sval;
@@ -151,6 +185,12 @@ struct Expr {
             Expr *e;
         } un;
         struct {
+            Expr *e; /* ptr(x): address of a place expression */
+        } addr;
+        struct {
+            Expr *p; /* defer(p): value stored at a pointer */
+        } deref;
+        struct {
             Expr **elems;
             int n;
         } arr;
@@ -171,6 +211,7 @@ typedef enum {
     ST_ASSIGN,
     ST_IF,
     ST_WHILE,
+    ST_FORIN,
     ST_RETURN,
     ST_EXPR,
     ST_BLOCK
@@ -201,6 +242,14 @@ struct Stmt {
             Expr *cond;
             Stmt *body;
         } wh;
+        struct {
+            const char **names; /* binding pattern: 1 name, or N field names */
+            int nnames;
+            Expr *iter;  /* array expr, or range lo when is_range */
+            Expr *hi;    /* range end (is_range only), NULL for arrays */
+            Stmt *body;
+            bool is_range;
+        } forin;
         struct {
             Expr *value;
         } ret;
@@ -248,6 +297,8 @@ typedef struct {
     int nfns, capfns;
     const char **includes; /* C headers requested with include "..." */
     int nincludes, capincludes;
+    const char **csrcs; /* .c files from `include "x.c" as extern C`, linked */
+    int ncsrcs, capcsrcs;
 } Program;
 
 typedef struct {
@@ -274,26 +325,53 @@ typedef struct Comp {
     int nimports, capimports;
     const char **loaded; /* files already parsed (absolute-ish paths) */
     int nloaded, caploaded;
+    const char **incdirs; /* directories searched for include/import names */
+    int nincdirs, capincdirs;
     bool no_protos; /* skip emitted C prototypes for extern functions */
 } Comp;
 
 const char *intern(Comp *c, const char *s, size_t n);
 void comp_error(Comp *c, int line, int col, const char *fmt, ...);
+Type type_i8(void);
+Type type_u8(void);
+Type type_i16(void);
+Type type_u16(void);
 Type type_i32(void);
+Type type_u32(void);
+Type type_i64(void);
+Type type_u64(void);
 Type type_f64(void);
 Type type_bool(void);
 Type type_unit(void);
 Type type_struct(int id);
 Type type_string(void);
 Type type_ptr(void);
+Type type_ptr_to(Type *elem);
 Type type_raw(const char *text);
 Type type_array(Type *elem);
 bool type_eq(Type a, Type b);
 bool type_is_struct(Type t);
 bool type_is_float(Type t);
+bool type_is_int(Type t);
+/* Width C gives an integer literal of this kind, and whether `v` fits in it.
+   Used for literal typing and for rejecting `var x: u8 = 300;` style mistakes. */
+bool type_int_bounds(Type t, int64_t *lo, int64_t *hi);
 const char *type_name(Comp *c, Type t);
 
 void ptrlist_push(void ***arr, int *n, int *cap, void *p);
+
+/* Path helpers, shared by the driver and the parser (which resolves
+   `include "x.c"` relative to the file containing it). Both return
+   malloc'd strings. */
+char *path_dir(const char *path);
+char *path_join(const char *dir, const char *rel);
+char *path_canonical(const char *path);
+bool file_exists(const char *path);
+bool dir_exists(const char *path);
+/* Last-resort lookup of an include/import name in `c->incdirs`
+   (command-line -I paths plus the default include/ folders).
+   Returns a malloc'd path, or NULL when no directory holds it. */
+char *comp_find_include(Comp *c, const char *spec);
 const char *unresolved_type_name(Type t);
 
 typedef struct {

@@ -1,0 +1,170 @@
+// memory.oak - raw memory, with the sharp edges filed off.
+//
+//   import "memory.oak";
+//
+//   var buf: ptr = mem_alloc(8);
+//   mem_write(buf, 0, 64, 1234567890123);
+//   print(mem_read(buf, 0, 64));
+//   mem_free(buf);
+//
+// A pointer is `ptr`, which is a C `void *` - the only pointer Oak can name.
+// Three things do everything:
+//
+//   var x: i32 = 7;          // an ordinary variable
+//   var p: ptr = ptr(x);     // ptr(x) takes its address  ->  &x
+//   print(defer(p));         // defer(p) reads it         ->  (*(int32_t *)p)
+//   defer(p) = 9;            // ... and can also write it
+//
+// `ptr` on its own is a void *: it accepts and returns anything, which is
+// what makes it usable straight from C. `ptr<T>` additionally remembers what
+// it points at, so defer() is typed:
+//
+//   var q: ptr<i32> = ptr(x);  // q is a ptr<i32> as far as Oak is concerned
+//
+// This file pulls in the C implementation itself, so `import "memory.oak";`
+// is the only line a program needs. See include/README.md for the search
+// order and C-INTEROP.md for the rules these declarations follow.
+
+include "memory.h";
+include "memory.c" as extern C;
+
+// Sizes are u64 and bit patterns are u32 so the C side can be handed a width
+// without guessing; values read back out come back as i64.
+extern fn oak_mem_alloc(size: u64) -> ptr;
+extern fn oak_mem_calloc(count: u64, size: u64) -> ptr;
+extern fn oak_mem_realloc(p: ptr, size: u64) -> ptr;
+extern fn oak_mem_free(p: ptr);
+extern fn oak_mem_size(p: ptr) -> u64;
+extern fn oak_mem_copy(dst: ptr, src: ptr, size: u64);
+extern fn oak_mem_fill(dst: ptr, byte: i32, size: u64);
+extern fn oak_mem_equal(a: ptr, b: ptr, size: u64) -> i32;
+extern fn oak_mem_align(size: u64) -> u64;
+extern fn oak_mem_read(p: ptr, offset: u64, bits: u32) -> i64;
+extern fn oak_mem_write(p: ptr, offset: u64, bits: u32, value: u64);
+
+extern fn oak_buffer_new(capacity: u64) -> ptr;
+extern fn oak_buffer_len(b: ptr) -> u64;
+extern fn oak_buffer_push(b: ptr, value: u64) -> u64;
+extern fn oak_buffer_at(b: ptr, index: u64) -> i64;
+extern fn oak_buffer_free(b: ptr);
+
+// Blocks ------------------------------------------------------------------
+
+// Allocate `size` bytes. Returns null when the request fails, so check with
+// mem_is_null before using it.
+fn mem_alloc(size: u64) -> ptr {
+    return oak_mem_alloc(size);
+}
+
+// Allocate zeroed memory for `count` items of `size` bytes each.
+fn mem_zeros(count: u64, size: u64) -> ptr {
+    return oak_mem_calloc(count, size);
+}
+
+// Grow or shrink a block. The bytes that survive are the first ones. A null
+// return means the old block is still valid and still yours to free.
+fn mem_resize(p: ptr, size: u64) -> ptr {
+    return oak_mem_realloc(p, size);
+}
+
+// Release a block. Safe to call with null, so cleanup paths need no guard.
+fn mem_free(p: ptr) {
+    if !mem_is_null(p) {
+        oak_mem_free(p);
+    }
+}
+
+fn mem_is_null(p: ptr) -> bool {
+    return p == null;
+}
+
+// Bytes in a block, or 0 for null.
+fn mem_size(p: ptr) -> u64 {
+    return oak_mem_size(p);
+}
+
+// Copy `size` bytes, clamped to what both blocks really hold.
+fn mem_copy(dst: ptr, src: ptr, size: u64) {
+    oak_mem_copy(dst, src, size);
+}
+
+fn mem_fill(dst: ptr, byte: i32, size: u64) {
+    oak_mem_fill(dst, byte, size);
+}
+
+fn mem_equal(a: ptr, b: ptr, size: u64) -> bool {
+    return oak_mem_equal(a, b, size) != 0;
+}
+
+// A fresh block holding a copy of `size` bytes from `src`.
+fn mem_dup(src: ptr, size: u64) -> ptr {
+    var copy: ptr = mem_zeros(1, size);
+    if !mem_is_null(copy) {
+        mem_copy(copy, src, size);
+    }
+    return copy;
+}
+
+// Round a byte count up to the next 16 byte boundary.
+fn mem_align(size: u64) -> u64 {
+    return oak_mem_align(size);
+}
+
+// Cells ------------------------------------------------------------------
+
+// Read a cell of 8, 16, 32 or 64 bits at `offset`, sign extended. Returns -1
+// when the cell would run past the end of the block, so a bad offset is
+// reported instead of crashing.
+fn mem_read(p: ptr, offset: u64, bits: u32) -> i64 {
+    return oak_mem_read(p, offset, bits);
+}
+
+// Write a cell of the same widths. A write past the end is dropped.
+fn mem_write(p: ptr, offset: u64, bits: u32, value: u64) {
+    oak_mem_write(p, offset, bits, value);
+}
+
+// A growable list of 64 bit cells that lives entirely on the C side: Oak
+// holds it as an opaque `ptr` and never sees the layout.
+fn buf_new(capacity: u64) -> ptr {
+    return oak_buffer_new(capacity);
+}
+
+fn buf_len(b: ptr) -> u64 {
+    return oak_buffer_len(b);
+}
+
+// Append a cell and return the new length (-1 on failure).
+fn buf_push(b: ptr, value: u64) -> u64 {
+    return oak_buffer_push(b, value);
+}
+
+// Cell at `index`, or -1 when the index is past the end.
+fn buf_get(b: ptr, index: u64) -> i64 {
+    return oak_buffer_at(b, index);
+}
+
+fn buf_free(b: ptr) {
+    if !mem_is_null(b) {
+        oak_buffer_free(b);
+    }
+}
+
+// Values through pointers -----------------------------------------------
+
+// Swap two 64 bit values without naming a variable for either. This is the
+// shape every pointer operation has: read with defer(p), write with
+// defer(p) = v, and the compiler keeps the C types straight.
+fn swap_i64(a: ptr<i64>, b: ptr<i64>) {
+    var tmp: i64 = defer(a);
+    defer(a) = defer(b);
+    defer(b) = tmp;
+}
+
+// The same for pointers, which needs a typed pointer to say what it points
+// at: ptr<ptr>.
+fn swap_ptr(a: ptr<ptr>, b: ptr<ptr>) {
+    var tmp: ptr = defer(a);
+    defer(a) = defer(b);
+    defer(b) = tmp;
+}

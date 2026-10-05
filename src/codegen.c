@@ -66,8 +66,22 @@ static void ind(CG *g) {
 
 static const char *ctype(Comp *c, Type t) {
     switch (t.kind) {
+    case TY_I8:
+        return "int8_t";
+    case TY_U8:
+        return "uint8_t";
+    case TY_I16:
+        return "int16_t";
+    case TY_U16:
+        return "uint16_t";
     case TY_I32:
         return "int32_t";
+    case TY_U32:
+        return "uint32_t";
+    case TY_I64:
+        return "int64_t";
+    case TY_U64:
+        return "uint64_t";
     case TY_F64:
         return "double";
     case TY_BOOL:
@@ -117,6 +131,12 @@ static int expr_flags(Expr *e) {
         break;
     case EX_FIELD:
         f |= expr_flags(e->field.base);
+        break;
+    case EX_ADDR:
+        f |= expr_flags(e->addr.e);
+        break;
+    case EX_DEREF:
+        f |= expr_flags(e->deref.p);
         break;
     case EX_ARRAY:
         f |= F_ARR;
@@ -196,6 +216,18 @@ static int stmt_flags(Stmt *s) {
         break;
     case ST_WHILE:
         f |= expr_flags(s->wh.cond) | stmt_flags(s->wh.body);
+        break;
+    case ST_FORIN:
+        f |= expr_flags(s->forin.iter) | stmt_flags(s->forin.body);
+        if (s->forin.hi) {
+            f |= expr_flags(s->forin.hi);
+        }
+        if (!s->forin.is_range) {
+            /* Array iteration emits oak_arr_len/oak_arr_slot (which call
+               oak_idx), so pull in those runtime helpers even when the loop
+               body never indexes the array directly. */
+            f |= F_ARR | F_ARRGET | F_IDX;
+        }
         break;
     case ST_RETURN:
         f |= expr_flags(s->ret.value);
@@ -444,6 +476,15 @@ static char *place(CG *g, Expr *e) {
         free(i);
         return r;
     }
+    if (e->kind == EX_DEREF) {
+        /* The pointer is a C `void *`, so the pointee type is spelled out at
+           the load (and store) site. */
+        char *p = rval(g, e->deref.p);
+        const char *et = ctype(g->c, e->deref.p->type.elem ? *e->deref.p->type.elem : type_i32());
+        char *r = strf("(*(%s *)(%s))", et, p);
+        free(p);
+        return r;
+    }
     return strf("0");
 }
 
@@ -462,6 +503,18 @@ static char *emit_call(CG *g, Expr *e) {
             s = strf("printf(\"%%s\\n\", (%s) ? \"true\" : \"false\")", a);
         } else if (at.kind == TY_PTR) {
             s = strf("printf(\"%%p\\n\", (void *)(%s))", a);
+        } else if (type_is_int(at)) {
+            /* print at the value's own width instead of truncating to int */
+            const char *spec = "d";
+            const char *cast = "int";
+            if (at.kind == TY_I8 || at.kind == TY_I16 || at.kind == TY_I64) {
+                spec = "lld";
+                cast = "long long";
+            } else if (type_is_int(at) && at.kind != TY_I32) {
+                spec = "llu";
+                cast = "unsigned long long";
+            }
+            s = strf("printf(\"%%%s\\n\", (%s)(%s))", spec, cast, a);
         } else {
             s = strf("printf(\"%%d\\n\", (int)(%s))", a);
         }
@@ -485,7 +538,22 @@ static char *emit_call(CG *g, Expr *e) {
         Type at = e->call.args[0]->type;
         const char *et = ctype(g->c, *at.elem);
         char *v = rval(g, e->call.args[1]);
-        char *s = strf("oak_arr_push(%s, &(%s){ %s })", b, et, v);
+        char *s;
+        if (at.kind == TY_ARRAY && type_is_struct(*at.elem) &&
+            e->call.args[1]->kind == EX_STRUCT) {
+            /* A struct literal is already a C compound literal, so take its
+               address directly: &(T){ ((T){...}) } is not valid C. */
+            s = strf("oak_arr_push(%s, &%s)", b, v);
+        } else if (at.kind == TY_ARRAY && type_is_struct(*at.elem) &&
+                   is_place(e->call.args[1])) {
+            /* An addressable struct value (var, field, array slot) can be
+               pushed by address; &(T){ var } would be a type error. */
+            char *p = place(g, e->call.args[1]);
+            s = strf("oak_arr_push(%s, &(%s))", b, p);
+            free(p);
+        } else {
+            s = strf("oak_arr_push(%s, &(%s){ %s })", b, et, v);
+        }
         free(b);
         free(v);
         return s;
@@ -538,6 +606,10 @@ static char *emit_call(CG *g, Expr *e) {
 static char *rval(CG *g, Expr *e) {
     switch (e->kind) {
     case EX_INT:
+        /* A literal above INT64_MAX only exists as an unsigned bit pattern. */
+        if (e->uval > (uint64_t)INT64_MAX) {
+            return strf("%lluULL", (unsigned long long)e->uval);
+        }
         return strf("%lld", (long long)e->ival);
     case EX_FLOAT: {
         char buf[64];
@@ -559,6 +631,15 @@ static char *rval(CG *g, Expr *e) {
     }
     case EX_VAR:
     case EX_FIELD:
+        return place(g, e);
+    case EX_ADDR: {
+        /* the address of a place: &x, parenthesised so it composes */
+        char *p = place(g, e->addr.e);
+        char *s = strf("(&%s)", p);
+        free(p);
+        return s;
+    }
+    case EX_DEREF:
         return place(g, e);
     case EX_INDEX:
         if (e->index.base->type.kind == TY_STRING) {
@@ -671,8 +752,11 @@ static void emit_stmt(CG *g, Stmt *s) {
     switch (s->kind) {
     case ST_VAR: {
         char *r = rval(g, s->var.init);
+        /* The annotation wins: it is what the programmer asked the C compiler
+           to see (`uint8_t x`, `void *p`), and it has been resolved already. */
+        Type dt = s->var.has_ann ? s->var.ann : s->var.init->type;
         ind(g);
-        fprintf(g->out, "%s %s = %s;\n", ctype(g->c, s->var.init->type), s->var.name, r);
+        fprintf(g->out, "%s %s = %s;\n", ctype(g->c, dt), s->var.name, r);
         free(r);
         break;
     }
@@ -714,6 +798,95 @@ static void emit_stmt(CG *g, Stmt *s) {
         free(cond);
         g->indent++;
         emit_block_inner(g, s->wh.body);
+        g->indent--;
+        ind(g);
+        fputs("}\n", g->out);
+        break;
+    }
+    case ST_FORIN: {
+        /* A `for` is scoped sugar over a while loop. Bounds are snapshotted
+           once, the loop variable is a block-local copy, and array elements
+           load through oak_arr_slot (bounds-checked, negative-index aware).
+           INT64_MAX bounds the i32 counter so even 0..INT32_MAX terminates. */
+        bool want_f64 = false;
+        if (s->forin.is_range) {
+            want_f64 = s->forin.iter->type.kind == TY_F64 || s->forin.hi->type.kind == TY_F64;
+        }
+        ind(g);
+        fputs("{\n", g->out);
+        g->indent++;
+        if (s->forin.is_range) {
+            char *lo = rval(g, s->forin.iter);
+            char *hi = rval(g, s->forin.hi);
+            const char *bt = want_f64 ? "double" : "int64_t";
+            int rn = g->tmp++;
+            ind(g);
+            fprintf(g->out, "%s _oak_lo%d = (%s)(%s);\n", bt, rn, bt, lo);
+            ind(g);
+            fprintf(g->out, "%s _oak_hi%d = (%s)(%s);\n", bt, rn, bt, hi);
+            free(lo);
+            free(hi);
+            ind(g);
+            if (want_f64) {
+                fprintf(g->out,
+                        "for (double _oak_i%d = _oak_lo%d; _oak_i%d <= _oak_hi%d; _oak_i%d += 1.0) {\n",
+                        rn, rn, rn, rn, rn);
+            } else {
+                fprintf(g->out,
+                        "for (int64_t _oak_i%d = _oak_lo%d; _oak_i%d <= _oak_hi%d; _oak_i%d++) {\n",
+                        rn, rn, rn, rn, rn);
+            }
+            g->indent++;
+            ind(g);
+            if (want_f64) {
+                fprintf(g->out, "double %s = _oak_i%d;\n", s->forin.names[0], rn);
+            } else {
+                fprintf(g->out, "int32_t %s = (int32_t)_oak_i%d;\n", s->forin.names[0],
+                        rn);
+            }
+        } else {
+            Type elem = *s->forin.iter->type.elem;
+            const char *et = ctype(g->c, elem);
+            char *arr = rval(g, s->forin.iter);
+            ind(g);
+            fprintf(g->out, "OakArr *_oak_arr%d = %s;\n", g->tmp, arr);
+            int arrn = g->tmp++;
+            free(arr);
+            ind(g);
+            fprintf(g->out,
+                    "for (int64_t _oak_i%d = 0; _oak_i%d < oak_arr_len(_oak_arr%d); _oak_i%d++) {\n",
+                    arrn, arrn, arrn, arrn);
+            g->indent++;
+            if (s->forin.nnames == 1) {
+                ind(g);
+                fprintf(g->out, "%s %s = (*(%s *)oak_arr_slot(_oak_arr%d, _oak_i%d));\n", et,
+                        s->forin.names[0], et, arrn, arrn);
+            } else {
+                ind(g);
+                fprintf(g->out, "%s _oak_el%d = (*(%s *)oak_arr_slot(_oak_arr%d, _oak_i%d));\n",
+                        et, arrn, et, arrn, arrn);
+                for (int i = 0; i < s->forin.nnames; i++) {
+                    const char *ft = et;
+                    if (elem.kind == TY_STRUCT && elem.struct_id >= 0 &&
+                        elem.struct_id < g->c->prog.nstructs) {
+                        StructDef *st = g->c->prog.structs[elem.struct_id];
+                        for (int q = 0; q < st->nfields; q++) {
+                            if (st->fields[q].name == s->forin.names[i]) {
+                                ft = ctype(g->c, st->fields[q].type);
+                                break;
+                            }
+                        }
+                    }
+                    ind(g);
+                    fprintf(g->out, "%s %s = _oak_el%d.%s;\n", ft, s->forin.names[i],
+                            arrn, s->forin.names[i]);
+                }
+            }
+        }
+        emit_block_inner(g, s->forin.body);
+        g->indent--;
+        ind(g);
+        fputs("}\n", g->out);
         g->indent--;
         ind(g);
         fputs("}\n", g->out);

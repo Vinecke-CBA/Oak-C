@@ -18,6 +18,12 @@
 *.oak.c
 *.o
 
+# Third-party tools dropped in by the user (e.g. dependencies/tcc/).
+# TCC is a complete distribution (tcc.exe + include/ + lib/), so it is either
+# vendored in full or not at all - ignoring the whole folder avoids committing
+# a broken half. Delete or negate this line to vendor it.
+/dependencies/
+
 # Editor / OS noise
 .vscode/
 .idea/

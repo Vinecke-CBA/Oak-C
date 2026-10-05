@@ -1,0 +1,10 @@
+// Circular import: this module includes include_extern.oak as Oak,
+// and also includes example.c as extern C to ensure duplicate C sources are deduplicated.
+include "include_extern.oak" as Oak;
+include "example.c" as extern C;
+
+extern fn multiply_numbers(a: i32, b: i32) -> i32;
+
+fn compute_from_oak(x: i32, y: i32) -> i32 {
+    return multiply_numbers(x, y);
+}

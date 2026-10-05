@@ -12,6 +12,10 @@ gcc -std=c99 -Wall -Wextra -O2 -o oakc src/oak.c src/lex.c src/parse.c src/typec
 
 Or `make` if you have it. `make test` compiles and runs every example.
 
+VS Code: `editors/vscode-oak/` is a ready-made extension — syntax
+highlighting, bracket/indent behaviour and a build task for the file you
+have open. See [its README](editors/vscode-oak/README.md).
+
 ## Run
 
 ```
@@ -22,10 +26,38 @@ hello
 Options:
 
 - `-o binary` output executable (default `a.exe` on Windows, `a.out` elsewhere)
+- `--cc name|path` C compiler to drive: `gcc` (default), `tcc`, `clang`, `cc`, or a path
+- `--config file` read settings from `file` instead of `oak.cfg`
 - `--emit-c file.c` keep the generated C
 - `--keep-c` keep the temporary `.oak.c` file
-- `-l/-L/-I/-D/-O/-W/-f/-m/-std...` forwarded to `gcc` (e.g. `-lm`)
-- `-- <flags...>` everything after `--` is forwarded to `gcc` verbatim
+- `--verbose` print the resolved settings and the compiler command
+- `-l/-L/-I/-D/-O/-W/-f/-m/-std...` forwarded to the C compiler (e.g. `-lm`)
+- `-- <flags...>` everything after `--` is forwarded to the compiler verbatim
+
+### oak.cfg
+
+`oak.cfg` — looked up next to the input file, then in the working directory —
+sets project defaults. Command-line flags always win over it:
+
+```ini
+cc = gcc          # gcc | tcc | clang | cc | path/to/compiler
+std = c99         # passed as -std=c99; use `-` to omit the flag
+opt = 2           # passed as -O2;     use `-` to omit the flag
+out = build/app   # default output when -o is not given
+flags = -lm       # extra flags appended to every compile/link line
+```
+
+### TinyCC: `--cc tcc`
+
+```sh
+oakc app.oak -o app --cc tcc
+```
+
+uses `dependencies/tcc/tcc.exe` when present, otherwise `tcc` from `PATH`.
+TCC compiles in milliseconds with a single downloaded binary and no install,
+which is ideal for a fast edit-run loop; it performs no optimization, so use
+gcc for release builds. It takes the same flags with one Windows exception:
+there is no separate libm, so `-lm` fails with `library 'm' not found`.
 
 ```sh
 oakc app.oak -o app -- -lm -I./include
@@ -82,11 +114,18 @@ fn main() {
         print(i);          // 0 1 2
         i = i + 1;
     }
+
+    for x in 0..3 { }      // inclusive range: 0 1 2 3
+    for w in ["a", "b"] {  // iterate an array
+        print(w);          // a b
+    }
 }
 ```
 
 Comparisons `== != < > <= >=` produce a `bool`; `&&` `||` `!` combine them.
 `if` and `while` need a `bool`. `else if` works by chaining.
+`for x in lo..hi { }` walks an **inclusive** range (both bounds included), and
+`for x in arr { }` iterates an array — see `examples/for_loops.oak`.
 
 One parsing rule to know: a `{` straight after a condition always opens the
 body, never a struct literal, so a struct literal used as a condition needs
@@ -227,6 +266,7 @@ Types: `i32`, `f64`, `bool`, `string`, `ptr` (+ `null`), `T[]`, `C "..."`,
 | field | `p.x` |
 | if | `if cond { } else if cond { } else { }` |
 | while | `while cond { }` |
+| for | `for x in 0..n { }` (inclusive) or `for [a, b] in rows { }` |
 | return | `return expr;` or `return;` |
 | comment | `// to end of line` |
 
@@ -292,6 +332,12 @@ Imports resolve relative to the importing file, recurse, and are loaded once
 (duplicate imports are ignored). All files share one program, so keep
 struct/function names unique across them.
 
+Shared files don't have to sit next to each other: anything you can't find
+next to the file or in the working directory is looked up in the project's
+`include/` folder (plus any `-I<dir>` you pass). `import "util.oak";`,
+`include "util.oak" as Oak;` and `include "x.c" as extern C;` all use that
+same search path — see [include/README.md](include/README.md).
+
 ### C interop: `include` + `extern fn` + raw types (mini tutorial part 4)
 
 ```oak
@@ -312,13 +358,19 @@ oakc app.oak -o app -- -lm
 ```
 
 - `include "header";` emits `#include`. Bare names (`"stdio.h"`) become
-  `<stdio.h>`; paths (`"./x.h"`, `"a/b.h"`) stay quoted.
+  `<stdio.h>`; paths (`"./x.h"`, `"a/b.h"`) stay quoted. Headers in the
+  project's `include/` folder are found automatically (`-Iinclude` is
+  added to the C compiler line for you).
 - `extern fn name(args...) -> ret;` declares a C function (no body, ends
   with `;`). The compiler emits an `extern` prototype and calls it directly.
-- Params/returns must be scalars: `i32`, `f64`, `bool`, `string`, `ptr`,
-  or a raw `C "..."` type. Structs/arrays cannot cross the boundary.
+- Params/returns must be scalars: the integer types (`i8`…`u64`), `f64`,
+  `bool`, `string`, `ptr`, or a raw `C "..."` type. Structs/arrays cannot
+  cross the boundary.
 - `ptr` holds any C pointer; `null` is a null `ptr`. Print a `ptr` with
   `print(p)` (`%p`).
+- Pointers work in source too: `ptr(x)` takes an address, `defer(p)` reads or
+  writes through one, and `ptr<T>` remembers the pointee. `include/memory.oak`
+  is a small library built entirely on that (see `examples/memory_ptr.oak`).
 - Raw C types: write `C "char *"` (any C spelling, quoted) wherever a type
   goes — e.g. `extern fn malloc(n: i32) -> C "void *";`.
 - Variadic C functions: `extern fn printf(fmt: string, ...) -> i32;`.
@@ -326,8 +378,8 @@ oakc app.oak -o app -- -lm
 
 ## Not supported
 
-Pointers/references in source (use `ptr`/`null` only via FFI), generics,
-free/GC (strings/arrays produced at runtime are never freed, same as before).
+Pointer arithmetic (`p + 1`), generics, free/GC (strings/arrays produced at
+runtime are never freed, same as before).
 
 ## Examples
 
@@ -337,5 +389,12 @@ free/GC (strings/arrays produced at runtime are never freed, same as before).
 - `examples/bad_twice.oak` is rejected by the aliasing rule
 - `examples/control_flow.oak` if/while, including the struct literal rule
 - `examples/strings.oak` concatenation, comparison, escapes, struct fields
+- `examples/features.oak` structs, arrays, strings, floats/bools/ptr, one FFI call
+- `examples/for_loops.oak` `for` over ranges, arrays and destructured fields
+- `examples/struct_arrays.oak` arrays of structs, pushed and mutated through slots
+- `examples/include_extern.oak` automatic C-source linking + circular imports
+- `examples/example.oak` / `example.c` the other half of that circular pair
+- `examples/include_dir.oak` the shared `include/` folder (header + `.c` + `import`)
 - `examples/raylib/` a full C-library wrapper (shim + `raylib.oak` + 3D demo)
+- `examples/sdl2/` SDL2 bindings built with the same shim pattern
 - `examples/bench/bench.oak` arithmetic/loop benchmark vs. the C equivalent

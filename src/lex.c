@@ -44,6 +44,18 @@ void lex_init(Lexer *l, Comp *c) {
     lex_next(l);
 }
 
+/* Copy a numeric token's text into `buf`, dropping the `_` digit separators, so
+   strtod/strtoull see only digits. Truncates rather than overflowing. */
+static void copy_number(char *buf, size_t cap, const char *s, size_t len) {
+    size_t j = 0;
+    for (size_t i = 0; i < len && j + 1 < cap; i++) {
+        if (s[i] != '_') {
+            buf[j++] = s[i];
+        }
+    }
+    buf[j] = 0;
+}
+
 void lex_next(Lexer *l) {
     lex_skip(l);
     Comp *c = l->c;
@@ -78,14 +90,32 @@ void lex_next(Lexer *l) {
             k = TOK_ELSE;
         } else if (strcmp(id, "while") == 0) {
             k = TOK_WHILE;
+        } else if (strcmp(id, "for") == 0) {
+            k = TOK_FOR;
+        } else if (strcmp(id, "in") == 0) {
+            k = TOK_IN;
         } else if (strcmp(id, "return") == 0) {
             k = TOK_RETURN;
         } else if (strcmp(id, "true") == 0) {
             k = TOK_TRUE;
         } else if (strcmp(id, "false") == 0) {
             k = TOK_FALSE;
+        } else if (strcmp(id, "i8") == 0) {
+            k = TOK_I8;
+        } else if (strcmp(id, "u8") == 0) {
+            k = TOK_U8;
+        } else if (strcmp(id, "i16") == 0) {
+            k = TOK_I16;
+        } else if (strcmp(id, "u16") == 0) {
+            k = TOK_U16;
         } else if (strcmp(id, "i32") == 0) {
             k = TOK_I32;
+        } else if (strcmp(id, "u32") == 0) {
+            k = TOK_U32;
+        } else if (strcmp(id, "i64") == 0) {
+            k = TOK_I64;
+        } else if (strcmp(id, "u64") == 0) {
+            k = TOK_U64;
         } else if (strcmp(id, "f64") == 0) {
             k = TOK_F64;
         } else if (strcmp(id, "bool") == 0) {
@@ -94,6 +124,8 @@ void lex_next(Lexer *l) {
             k = TOK_STRTYPE;
         } else if (strcmp(id, "ptr") == 0) {
             k = TOK_PTR;
+        } else if (strcmp(id, "defer") == 0) {
+            k = TOK_DEREF;
         } else if (strcmp(id, "null") == 0) {
             k = TOK_NULL;
         } else if (strcmp(id, "extern") == 0) {
@@ -109,7 +141,37 @@ void lex_next(Lexer *l) {
     }
     if (isdigit((unsigned char)ch)) {
         size_t start = l->pos;
-        while (l->pos < n && isdigit((unsigned char)s[l->pos])) {
+        /* 0x / 0b literals: the bases C code reaches for when it means to talk
+           about bits and masks. */
+        if (ch == '0' && start + 1 < n && (s[start + 1] == 'x' || s[start + 1] == 'X')) {
+            l->pos += 2;
+            l->col += 2;
+            while (l->pos < n && (isxdigit((unsigned char)s[l->pos]) || s[l->pos] == '_')) {
+                l->pos++;
+                l->col++;
+            }
+            char buf[128];
+            copy_number(buf, sizeof(buf), s + start, l->pos - start);
+            l->tok = make_tok(TOK_INT, line, col);
+            l->tok.uval = strtoull(buf + 2, NULL, 16);
+            l->tok.ival = (int64_t)l->tok.uval;
+            return;
+        }
+        if (ch == '0' && start + 1 < n && (s[start + 1] == 'b' || s[start + 1] == 'B')) {
+            l->pos += 2;
+            l->col += 2;
+            while (l->pos < n && (s[l->pos] == '0' || s[l->pos] == '1' || s[l->pos] == '_')) {
+                l->pos++;
+                l->col++;
+            }
+            char buf[128];
+            copy_number(buf, sizeof(buf), s + start, l->pos - start);
+            l->tok = make_tok(TOK_INT, line, col);
+            l->tok.uval = strtoull(buf + 2, NULL, 2);
+            l->tok.ival = (int64_t)l->tok.uval;
+            return;
+        }
+        while (l->pos < n && (isdigit((unsigned char)s[l->pos]) || s[l->pos] == '_')) {
             l->pos++;
             l->col++;
         }
@@ -121,22 +183,18 @@ void lex_next(Lexer *l) {
                 l->col++;
             }
             char buf[128];
-            size_t flen = l->pos - start;
-            if (flen >= sizeof(buf)) {
-                flen = sizeof(buf) - 1;
-            }
-            memcpy(buf, s + start, flen);
-            buf[flen] = 0;
+            copy_number(buf, sizeof(buf), s + start, l->pos - start);
             l->tok = make_tok(TOK_FLOAT, line, col);
             l->tok.fval = strtod(buf, NULL);
             return;
         }
-        int64_t v = 0;
-        for (size_t i = start; i < l->pos; i++) {
-            v = v * 10 + (s[i] - '0');
-        }
+        char buf[128];
+        copy_number(buf, sizeof(buf), s + start, l->pos - start);
         l->tok = make_tok(TOK_INT, line, col);
-        l->tok.ival = v;
+        /* strtoull keeps the full 64 bits, so a literal above INT64_MAX is
+           still exact and can be given to a u64. */
+        l->tok.uval = strtoull(buf, NULL, 10);
+        l->tok.ival = (int64_t)l->tok.uval;
         return;
     }
     if (ch == '"') {
@@ -242,10 +300,22 @@ void lex_next(Lexer *l) {
         return;
     }
     if (ch == '.') {
+        /* `...` (variadic marker) keeps its old shape; `..` is an inclusive
+           range. Both branches return before the shared advance at the
+           bottom, so each consumes exactly its own dots. */
         if (l->pos + 1 < n && s[l->pos] == '.' && s[l->pos + 1] == '.') {
             l->pos += 2;
             l->col += 2;
             l->tok = make_tok(TOK_ELLIPSIS, line, col);
+            return;
+        }
+        if (l->pos < n && s[l->pos] == '.') {
+            /* Two dots, but not a third: an inclusive range (`0..5`). The
+               outer advance (below) consumed the first dot, so consume the
+               second one here and emit the token. */
+            l->pos++;
+            l->col++;
+            l->tok = make_tok(TOK_DOTDOT, line, col);
             return;
         }
         l->tok = make_tok(TOK_DOT, line, col);
@@ -314,7 +384,8 @@ void lex_next(Lexer *l) {
             l->tok = make_tok(TOK_ANDAND, line, col);
             return;
         }
-        comp_error(c, line, col, "unexpected '&' (Oak has no pointers or references in source)");
+        comp_error(c, line, col,
+                   "unexpected '&' (Oak writes addresses as ptr(x), not &x)");
         l->tok = make_tok(TOK_ANDAND, line, col);
         return;
     }

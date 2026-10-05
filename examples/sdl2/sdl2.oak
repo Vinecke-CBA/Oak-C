@@ -1,0 +1,527 @@
+// Oak wrapper for SDL2: window, renderer, geometry, textures, events,
+// keyboard, mouse, timers, and the constants that go with them.
+//
+// How it is wired up
+// ------------------
+// SDL2's own headers cannot be used from Oak:
+//   * Oak writes its own prototype per `extern fn` (int32_t / double / bool /
+//     const char * / void *), which collides with SDL's sized enums
+//     (SDL_WindowFlags, SDL_bool) and structs by value (SDL_Rect, SDL_Event);
+//   * <SDL2/SDL.h> also #defines `main` to `SDL_main`, so Oak's
+//     `int main(void)` would not even compile in a file that includes it.
+// So all SDL types stay inside sdl2_shim.c, and Oak calls the `sdl2_*`
+// functions there, which speak Oak's types. The shim is compiled and linked
+// automatically by the line below — no `--` file arguments needed:
+//
+//   oakc examples/sdl2/demo_bounce.oak -o demo_bounce -- -lSDL2
+//
+// (Only the SDL *library* flag is still yours to pass: which library to link
+// is a property of the machine, not of this folder. Static builds need
+// `sdl2-config --static-libs`, see README.md.)
+//
+// SDL objects (windows, renderers, textures, events) are `ptr` handles.
+// Coordinates are i32, angles/times are f64, colors are (r, g, b) byte tuples.
+
+include "sdl2_shim.c" as extern C;
+
+// --------------------------- core ----------------------------
+
+extern fn sdl2_init(flags: i32) -> i32;
+extern fn sdl2_quit();
+extern fn sdl2_init_subsystem(flags: i32) -> i32;
+extern fn sdl2_quit_subsystem(flags: i32);
+extern fn sdl2_error() -> string;
+extern fn sdl2_clear_error();
+extern fn sdl2_version() -> i32;              // 2030008 == 2.30.8
+extern fn sdl2_video_driver() -> string;
+extern fn sdl2_num_video_drivers() -> i32;
+extern fn sdl2_video_driver_name(index: i32) -> string;
+extern fn sdl2_set_hint(name: string, value: string);
+extern fn sdl2_get_hint(name: string) -> string;
+extern fn sdl2_format(fmt: string, ...) -> string;  // printf into an Oak string
+extern fn sdl2_num_allocations() -> i32;
+
+// -------------------------- displays -------------------------
+
+extern fn sdl2_num_displays() -> i32;
+extern fn sdl2_display_width(index: i32) -> i32;
+extern fn sdl2_display_height(index: i32) -> i32;
+extern fn sdl2_display_usable_width(index: i32) -> i32;
+extern fn sdl2_display_usable_height(index: i32) -> i32;
+extern fn sdl2_display_dpi(index: i32) -> f64;
+
+// --------------------------- windows -------------------------
+
+extern fn sdl2_create_window(title: string, x: i32, y: i32, w: i32, h: i32,
+                             flags: i32) -> ptr;
+extern fn sdl2_destroy_window(win: ptr);
+extern fn sdl2_set_window_title(win: ptr, title: string);
+extern fn sdl2_window_title(win: ptr) -> string;
+extern fn sdl2_set_window_size(win: ptr, w: i32, h: i32);
+extern fn sdl2_window_width(win: ptr) -> i32;
+extern fn sdl2_window_height(win: ptr) -> i32;
+extern fn sdl2_window_pixel_width(win: ptr) -> i32;
+extern fn sdl2_window_pixel_height(win: ptr) -> i32;
+extern fn sdl2_set_window_position(win: ptr, x: i32, y: i32);
+extern fn sdl2_window_x(win: ptr) -> i32;
+extern fn sdl2_window_y(win: ptr) -> i32;
+extern fn sdl2_window_id(win: ptr) -> i32;
+extern fn sdl2_window_flags(win: ptr) -> i32;
+extern fn sdl2_window_from_id(id: i32) -> ptr;
+extern fn sdl2_show_window(win: ptr);
+extern fn sdl2_hide_window(win: ptr);
+extern fn sdl2_maximize_window(win: ptr);
+extern fn sdl2_minimize_window(win: ptr);
+extern fn sdl2_restore_window(win: ptr);
+extern fn sdl2_raise_window(win: ptr);
+extern fn sdl2_set_window_bordered(win: ptr, on: bool);
+extern fn sdl2_set_window_resizable(win: ptr, on: bool);
+extern fn sdl2_set_window_on_top(win: ptr, on: bool);
+extern fn sdl2_set_window_keyboard_grab(win: ptr, on: bool);
+extern fn sdl2_set_window_mouse_grab(win: ptr, on: bool);
+extern fn sdl2_set_window_mouse_rect(win: ptr, x: i32, y: i32, w: i32, h: i32);
+extern fn sdl2_set_window_fullscreen(win: ptr, flags: i32);
+extern fn sdl2_set_window_minimum_size(win: ptr, w: i32, h: i32);
+extern fn sdl2_set_window_maximum_size(win: ptr, w: i32, h: i32);
+extern fn sdl2_set_window_opacity(win: ptr, opacity: f64);
+extern fn sdl2_window_has_focus(win: ptr) -> bool;
+extern fn sdl2_window_has_mouse_focus(win: ptr) -> bool;
+
+// -------------------------- renderers ------------------------
+
+extern fn sdl2_create_renderer(win: ptr, index: i32, flags: i32) -> ptr;
+extern fn sdl2_destroy_renderer(ren: ptr);
+extern fn sdl2_renderer_name(ren: ptr) -> string;
+extern fn sdl2_num_render_drivers() -> i32;
+extern fn sdl2_render_driver_name(index: i32) -> string;
+extern fn sdl2_render_target_supported(ren: ptr) -> bool;
+extern fn sdl2_set_draw_color(ren: ptr, r: i32, g: i32, b: i32, a: i32);
+extern fn sdl2_render_clear(ren: ptr);
+extern fn sdl2_render_present(ren: ptr);
+extern fn sdl2_render_flush(ren: ptr);
+extern fn sdl2_set_render_vsync(ren: ptr, on: bool);
+extern fn sdl2_set_viewport(ren: ptr, x: i32, y: i32, w: i32, h: i32); // w<0 = whole target
+extern fn sdl2_set_logical_size(ren: ptr, w: i32, h: i32);
+extern fn sdl2_set_integer_scale(ren: ptr, on: bool);
+extern fn sdl2_set_render_scale(ren: ptr, sx: f64, sy: f64);
+extern fn sdl2_output_width(ren: ptr) -> i32;
+extern fn sdl2_output_height(ren: ptr) -> i32;
+extern fn sdl2_set_render_target(ren: ptr, tex: ptr);   // null = back buffer
+extern fn sdl2_set_blend_mode(ren: ptr, mode: i32);
+
+// -------------------------- geometry -------------------------
+
+extern fn sdl2_draw_point(ren: ptr, x: i32, y: i32);
+extern fn sdl2_draw_line(ren: ptr, x0: i32, y0: i32, x1: i32, y1: i32);
+extern fn sdl2_draw_rect(ren: ptr, x: i32, y: i32, w: i32, h: i32);
+extern fn sdl2_fill_rect(ren: ptr, x: i32, y: i32, w: i32, h: i32);
+extern fn sdl2_draw_circle(ren: ptr, cx: i32, cy: i32, radius: i32);
+extern fn sdl2_fill_circle(ren: ptr, cx: i32, cy: i32, radius: i32);
+
+// -------------------------- textures -------------------------
+
+extern fn sdl2_create_texture(ren: ptr, access: i32, w: i32, h: i32) -> ptr;
+extern fn sdl2_solid_texture(ren: ptr, w: i32, h: i32, r: i32, g: i32, b: i32, a: i32) -> ptr;
+extern fn sdl2_load_bmp(ren: ptr, path: string) -> ptr;
+extern fn sdl2_destroy_texture(tex: ptr);
+extern fn sdl2_texture_width(tex: ptr) -> i32;
+extern fn sdl2_texture_height(tex: ptr) -> i32;
+extern fn sdl2_set_texture_color(tex: ptr, r: i32, g: i32, b: i32) -> i32;
+extern fn sdl2_set_texture_alpha(tex: ptr, a: i32) -> i32;
+extern fn sdl2_set_texture_blend_mode(tex: ptr, mode: i32) -> i32;
+extern fn sdl2_fill_texture(tex: ptr, r: i32, g: i32, b: i32, a: i32) -> i32;
+// sx < 0 copies the whole texture; dw/dh <= 0 keep the source size.
+extern fn sdl2_copy(ren: ptr, tex: ptr, sx: i32, sy: i32, sw: i32, sh: i32,
+                    dx: i32, dy: i32, dw: i32, dh: i32);
+// cx/cy < 0 rotates around the middle of the destination rect.
+extern fn sdl2_copy_ex(ren: ptr, tex: ptr, sx: i32, sy: i32, sw: i32, sh: i32,
+                       dx: i32, dy: i32, dw: i32, dh: i32, angle: f64,
+                       cx: i32, cy: i32, flip: i32);
+
+// --------------------------- events --------------------------
+// Allocate one event handle with sdl2_event_new() and reuse it for the whole
+// program; read it back with the sdl2_ev_* accessors.
+
+extern fn sdl2_event_new() -> ptr;
+extern fn sdl2_event_free(ev: ptr);
+extern fn sdl2_pump_events();
+extern fn sdl2_poll_event(ev: ptr) -> i32;    // 1 = event filled in
+extern fn sdl2_wait_event(ev: ptr) -> i32;
+extern fn sdl2_wait_timeout(ev: ptr, ms: i32) -> i32;
+extern fn sdl2_flush_events();
+extern fn sdl2_push_quit() -> i32;
+extern fn sdl2_ev_type(ev: ptr) -> i32;
+extern fn sdl2_ev_window_id(ev: ptr) -> i32;
+extern fn sdl2_ev_window_event(ev: ptr) -> i32;
+extern fn sdl2_ev_window_data1(ev: ptr) -> i32;
+extern fn sdl2_ev_window_data2(ev: ptr) -> i32;
+extern fn sdl2_ev_key_scancode(ev: ptr) -> i32;
+extern fn sdl2_ev_key_keycode(ev: ptr) -> i32;
+extern fn sdl2_ev_key_down(ev: ptr) -> bool;
+extern fn sdl2_ev_key_mod(ev: ptr) -> i32;
+extern fn sdl2_ev_text(ev: ptr) -> string;    // TEXTINPUT / TEXTEDITING / DROPFILE
+extern fn sdl2_ev_mouse_button(ev: ptr) -> i32;
+extern fn sdl2_ev_mouse_down(ev: ptr) -> bool;
+extern fn sdl2_ev_mouse_x(ev: ptr) -> i32;
+extern fn sdl2_ev_mouse_y(ev: ptr) -> i32;
+extern fn sdl2_ev_mouse_relx(ev: ptr) -> i32;
+extern fn sdl2_ev_mouse_rely(ev: ptr) -> i32;
+extern fn sdl2_ev_wheel_x(ev: ptr) -> f64;
+extern fn sdl2_ev_wheel_y(ev: ptr) -> f64;
+extern fn sdl2_ev_user_code(ev: ptr) -> i32;
+extern fn sdl2_ev_user_data1(ev: ptr) -> i32;
+
+// -------------------------- keyboard -------------------------
+// sdl2_key_down polls the physical key state; events give you edges + text.
+
+extern fn sdl2_key_down(scancode: i32) -> bool;
+extern fn sdl2_scancode_letter(letter: i32) -> i32;  // 'a'..'z' either case
+extern fn sdl2_scancode_digit(digit: i32) -> i32;    // 0..9
+extern fn sdl2_scancode_key(index: i32) -> i32;      // 1..12 -> F1..F12
+extern fn sdl2_scancode_name(scancode: i32) -> string;
+extern fn sdl2_keycode_name(keycode: i32) -> string;
+extern fn sdl2_keycode_from_scancode(scancode: i32) -> i32;
+extern fn sdl2_scancode_from_keycode(keycode: i32) -> i32;
+extern fn sdl2_keyboard_focus() -> bool;
+extern fn sdl2_text_input(on: bool);
+
+// ---------------------------- mouse --------------------------
+
+extern fn sdl2_mouse_x() -> i32;
+extern fn sdl2_mouse_y() -> i32;
+extern fn sdl2_mouse_global_x() -> i32;
+extern fn sdl2_mouse_global_y() -> i32;
+extern fn sdl2_mouse_buttons() -> i32;        // SDL_BUTTON_*MASK bits
+extern fn sdl2_mouse_button_down(button: i32) -> bool;
+extern fn sdl2_show_cursor(show: bool);
+extern fn sdl2_cursor_shown() -> bool;
+extern fn sdl2_set_mouse_relative(on: bool);
+extern fn sdl2_warp_mouse(win: ptr, x: i32, y: i32);
+
+// --------------------------- timers --------------------------
+
+extern fn sdl2_ticks() -> f64;                // ms since sdl2_init
+extern fn sdl2_delay(ms: i32);
+extern fn sdl2_perf_counter() -> f64;
+extern fn sdl2_perf_freq() -> f64;
+extern fn sdl2_time() -> f64;                 // seconds, high resolution
+
+
+// -------------------------- constants ------------------------
+// One function per SDL2 macro. Values come from the SDL headers at compile
+// time (sdl2_consts.def), so they always match the SDL you link against.
+
+// SDL_INIT_TIMER
+extern fn sdl2_init_timer() -> i32;
+// SDL_INIT_AUDIO
+extern fn sdl2_init_audio() -> i32;
+// SDL_INIT_VIDEO
+extern fn sdl2_init_video() -> i32;
+// SDL_INIT_JOYSTICK
+extern fn sdl2_init_joystick() -> i32;
+// SDL_INIT_GAMECONTROLLER
+extern fn sdl2_init_gamecontroller() -> i32;
+// SDL_INIT_EVENTS
+extern fn sdl2_init_events() -> i32;
+// SDL_INIT_SENSOR
+extern fn sdl2_init_sensor() -> i32;
+// SDL_INIT_EVERYTHING
+extern fn sdl2_init_everything() -> i32;
+// SDL_WINDOW_FULLSCREEN
+extern fn sdl2_window_fullscreen() -> i32;
+// SDL_WINDOW_OPENGL
+extern fn sdl2_window_opengl() -> i32;
+// SDL_WINDOW_SHOWN
+extern fn sdl2_window_shown() -> i32;
+// SDL_WINDOW_HIDDEN
+extern fn sdl2_window_hidden() -> i32;
+// SDL_WINDOW_BORDERLESS
+extern fn sdl2_window_borderless() -> i32;
+// SDL_WINDOW_RESIZABLE
+extern fn sdl2_window_resizable() -> i32;
+// SDL_WINDOW_MINIMIZED
+extern fn sdl2_window_minimized() -> i32;
+// SDL_WINDOW_MAXIMIZED
+extern fn sdl2_window_maximized() -> i32;
+// SDL_WINDOW_MOUSE_GRABBED
+extern fn sdl2_window_mouse_grabbed() -> i32;
+// SDL_WINDOW_KEYBOARD_GRABBED
+extern fn sdl2_window_keyboard_grabbed() -> i32;
+// SDL_WINDOW_INPUT_FOCUS
+extern fn sdl2_window_input_focus() -> i32;
+// SDL_WINDOW_MOUSE_FOCUS
+extern fn sdl2_window_mouse_focus() -> i32;
+// SDL_WINDOW_FULLSCREEN_DESKTOP
+extern fn sdl2_window_fullscreen_desktop() -> i32;
+// SDL_WINDOW_FOREIGN
+extern fn sdl2_window_foreign() -> i32;
+// SDL_WINDOW_ALLOW_HIGHDPI
+extern fn sdl2_window_allow_highdpi() -> i32;
+// SDL_WINDOW_MOUSE_CAPTURE
+extern fn sdl2_window_mouse_capture() -> i32;
+// SDL_WINDOW_ALWAYS_ON_TOP
+extern fn sdl2_window_always_on_top() -> i32;
+// SDL_WINDOW_SKIP_TASKBAR
+extern fn sdl2_window_skip_taskbar() -> i32;
+// SDL_WINDOW_UTILITY
+extern fn sdl2_window_utility() -> i32;
+// SDL_WINDOW_TOOLTIP
+extern fn sdl2_window_tooltip() -> i32;
+// SDL_WINDOW_POPUP_MENU
+extern fn sdl2_window_popup_menu() -> i32;
+// SDL_WINDOW_VULKAN
+extern fn sdl2_window_vulkan() -> i32;
+// SDL_WINDOW_METAL
+extern fn sdl2_window_metal() -> i32;
+// SDL_WINDOWPOS_UNDEFINED
+extern fn sdl2_windowpos_undefined() -> i32;
+// SDL_WINDOWPOS_CENTERED
+extern fn sdl2_windowpos_centered() -> i32;
+// SDL_RENDERER_SOFTWARE
+extern fn sdl2_renderer_software() -> i32;
+// SDL_RENDERER_ACCELERATED
+extern fn sdl2_renderer_accelerated() -> i32;
+// SDL_RENDERER_PRESENTVSYNC
+extern fn sdl2_renderer_presentvsync() -> i32;
+// SDL_RENDERER_TARGETTEXTURE
+extern fn sdl2_renderer_targettexture() -> i32;
+// SDL_TEXTUREACCESS_STATIC
+extern fn sdl2_texture_static() -> i32;
+// SDL_TEXTUREACCESS_STREAMING
+extern fn sdl2_texture_streaming() -> i32;
+// SDL_TEXTUREACCESS_TARGET
+extern fn sdl2_texture_target() -> i32;
+// SDL_BLENDMODE_NONE
+extern fn sdl2_blend_none() -> i32;
+// SDL_BLENDMODE_BLEND
+extern fn sdl2_blend_blend() -> i32;
+// SDL_BLENDMODE_ADD
+extern fn sdl2_blend_add() -> i32;
+// SDL_BLENDMODE_MOD
+extern fn sdl2_blend_mod() -> i32;
+// SDL_BLENDMODE_MUL
+extern fn sdl2_blend_mul() -> i32;
+// SDL_FLIP_NONE
+extern fn sdl2_flip_none() -> i32;
+// SDL_FLIP_HORIZONTAL
+extern fn sdl2_flip_horizontal() -> i32;
+// SDL_FLIP_VERTICAL
+extern fn sdl2_flip_vertical() -> i32;
+// SDL_FIRSTEVENT
+extern fn sdl2_ev_firstevent() -> i32;
+// SDL_QUIT
+extern fn sdl2_ev_quit() -> i32;
+// SDL_APP_TERMINATING
+extern fn sdl2_ev_app_terminating() -> i32;
+// SDL_APP_LOWMEMORY
+extern fn sdl2_ev_app_lowmemory() -> i32;
+// SDL_APP_WILLENTERBACKGROUND
+extern fn sdl2_ev_app_will_enter_background() -> i32;
+// SDL_APP_DIDENTERBACKGROUND
+extern fn sdl2_ev_app_did_enter_background() -> i32;
+// SDL_APP_WILLENTERFOREGROUND
+extern fn sdl2_ev_app_will_enter_foreground() -> i32;
+// SDL_APP_DIDENTERFOREGROUND
+extern fn sdl2_ev_app_did_enter_foreground() -> i32;
+// SDL_LOCALECHANGED
+extern fn sdl2_ev_locale_changed() -> i32;
+// SDL_DISPLAYEVENT
+extern fn sdl2_ev_display() -> i32;
+// SDL_WINDOWEVENT
+extern fn sdl2_ev_window() -> i32;
+// SDL_SYSWMEVENT
+extern fn sdl2_ev_syswm() -> i32;
+// SDL_KEYDOWN
+extern fn sdl2_ev_keydown() -> i32;
+// SDL_KEYUP
+extern fn sdl2_ev_keyup() -> i32;
+// SDL_TEXTEDITING
+extern fn sdl2_ev_text_editing() -> i32;
+// SDL_TEXTINPUT
+extern fn sdl2_ev_text_input() -> i32;
+// SDL_KEYMAPCHANGED
+extern fn sdl2_ev_keymap_changed() -> i32;
+// SDL_MOUSEMOTION
+extern fn sdl2_ev_mouse_motion() -> i32;
+// SDL_MOUSEBUTTONDOWN
+extern fn sdl2_ev_mouse_button_down() -> i32;
+// SDL_MOUSEBUTTONUP
+extern fn sdl2_ev_mouse_button_up() -> i32;
+// SDL_MOUSEWHEEL
+extern fn sdl2_ev_mouse_wheel() -> i32;
+// SDL_JOYAXISMOTION
+extern fn sdl2_ev_joystick_axis_motion() -> i32;
+// SDL_JOYHATMOTION
+extern fn sdl2_ev_joystick_hat_motion() -> i32;
+// SDL_JOYBUTTONDOWN
+extern fn sdl2_ev_joystick_button_down() -> i32;
+// SDL_JOYBUTTONUP
+extern fn sdl2_ev_joystick_button_up() -> i32;
+// SDL_JOYDEVICEADDED
+extern fn sdl2_ev_joystick_device_added() -> i32;
+// SDL_JOYDEVICEREMOVED
+extern fn sdl2_ev_joystick_device_removed() -> i32;
+// SDL_CONTROLLERAXISMOTION
+extern fn sdl2_ev_controller_axis_motion() -> i32;
+// SDL_CONTROLLERBUTTONDOWN
+extern fn sdl2_ev_controller_button_down() -> i32;
+// SDL_CONTROLLERBUTTONUP
+extern fn sdl2_ev_controller_button_up() -> i32;
+// SDL_CONTROLLERDEVICEADDED
+extern fn sdl2_ev_controller_device_added() -> i32;
+// SDL_CONTROLLERDEVICEREMOVED
+extern fn sdl2_ev_controller_device_removed() -> i32;
+// SDL_FINGERDOWN
+extern fn sdl2_ev_finger_down() -> i32;
+// SDL_FINGERUP
+extern fn sdl2_ev_finger_up() -> i32;
+// SDL_FINGERMOTION
+extern fn sdl2_ev_finger_motion() -> i32;
+// SDL_CLIPBOARDUPDATE
+extern fn sdl2_ev_clipboard_update() -> i32;
+// SDL_DROPFILE
+extern fn sdl2_ev_drop_file() -> i32;
+// SDL_DROPTEXT
+extern fn sdl2_ev_drop_text() -> i32;
+// SDL_DROPBEGIN
+extern fn sdl2_ev_drop_begin() -> i32;
+// SDL_DROPCOMPLETE
+extern fn sdl2_ev_drop_complete() -> i32;
+// SDL_RENDER_TARGETS_RESET
+extern fn sdl2_ev_render_targets_reset() -> i32;
+// SDL_RENDER_DEVICE_RESET
+extern fn sdl2_ev_render_device_reset() -> i32;
+// SDL_USEREVENT
+extern fn sdl2_ev_user() -> i32;
+// SDL_LASTEVENT
+extern fn sdl2_ev_lastevent() -> i32;
+// SDL_WINDOWEVENT_NONE
+extern fn sdl2_windowevent_none() -> i32;
+// SDL_WINDOWEVENT_SHOWN
+extern fn sdl2_windowevent_shown() -> i32;
+// SDL_WINDOWEVENT_HIDDEN
+extern fn sdl2_windowevent_hidden() -> i32;
+// SDL_WINDOWEVENT_EXPOSED
+extern fn sdl2_windowevent_exposed() -> i32;
+// SDL_WINDOWEVENT_MOVED
+extern fn sdl2_windowevent_moved() -> i32;
+// SDL_WINDOWEVENT_RESIZED
+extern fn sdl2_windowevent_resized() -> i32;
+// SDL_WINDOWEVENT_SIZE_CHANGED
+extern fn sdl2_windowevent_size_changed() -> i32;
+// SDL_WINDOWEVENT_MINIMIZED
+extern fn sdl2_windowevent_minimized() -> i32;
+// SDL_WINDOWEVENT_MAXIMIZED
+extern fn sdl2_windowevent_maximized() -> i32;
+// SDL_WINDOWEVENT_RESTORED
+extern fn sdl2_windowevent_restored() -> i32;
+// SDL_WINDOWEVENT_ENTER
+extern fn sdl2_windowevent_enter() -> i32;
+// SDL_WINDOWEVENT_LEAVE
+extern fn sdl2_windowevent_leave() -> i32;
+// SDL_WINDOWEVENT_FOCUS_GAINED
+extern fn sdl2_windowevent_focus_gained() -> i32;
+// SDL_WINDOWEVENT_FOCUS_LOST
+extern fn sdl2_windowevent_focus_lost() -> i32;
+// SDL_WINDOWEVENT_CLOSE
+extern fn sdl2_windowevent_close() -> i32;
+// KMOD_LSHIFT
+extern fn sdl2_keymod_lshift() -> i32;
+// KMOD_RSHIFT
+extern fn sdl2_keymod_rshift() -> i32;
+// KMOD_LCTRL
+extern fn sdl2_keymod_lctrl() -> i32;
+// KMOD_RCTRL
+extern fn sdl2_keymod_rctrl() -> i32;
+// KMOD_LALT
+extern fn sdl2_keymod_lalt() -> i32;
+// KMOD_RALT
+extern fn sdl2_keymod_ralt() -> i32;
+// KMOD_LGUI
+extern fn sdl2_keymod_lgui() -> i32;
+// KMOD_RGUI
+extern fn sdl2_keymod_rgui() -> i32;
+// KMOD_NUM
+extern fn sdl2_keymod_num() -> i32;
+// KMOD_CAPS
+extern fn sdl2_keymod_caps() -> i32;
+// KMOD_MODE
+extern fn sdl2_keymod_mode() -> i32;
+// SDL_SCANCODE_UNKNOWN
+extern fn sdl2_scancode_unknown() -> i32;
+// SDL_SCANCODE_RETURN
+extern fn sdl2_scancode_return() -> i32;
+// SDL_SCANCODE_ESCAPE
+extern fn sdl2_scancode_escape() -> i32;
+// SDL_SCANCODE_BACKSPACE
+extern fn sdl2_scancode_backspace() -> i32;
+// SDL_SCANCODE_TAB
+extern fn sdl2_scancode_tab() -> i32;
+// SDL_SCANCODE_SPACE
+extern fn sdl2_scancode_space() -> i32;
+// SDL_SCANCODE_RIGHT
+extern fn sdl2_scancode_right() -> i32;
+// SDL_SCANCODE_LEFT
+extern fn sdl2_scancode_left() -> i32;
+// SDL_SCANCODE_DOWN
+extern fn sdl2_scancode_down() -> i32;
+// SDL_SCANCODE_UP
+extern fn sdl2_scancode_up() -> i32;
+// SDL_SCANCODE_LCTRL
+extern fn sdl2_scancode_lctrl() -> i32;
+// SDL_SCANCODE_LSHIFT
+extern fn sdl2_scancode_lshift() -> i32;
+// SDL_SCANCODE_LALT
+extern fn sdl2_scancode_lalt() -> i32;
+// SDL_SCANCODE_LGUI
+extern fn sdl2_scancode_lgui() -> i32;
+// SDL_SCANCODE_RCTRL
+extern fn sdl2_scancode_rctrl() -> i32;
+// SDL_SCANCODE_RSHIFT
+extern fn sdl2_scancode_rshift() -> i32;
+// SDL_SCANCODE_DELETE
+extern fn sdl2_scancode_delete() -> i32;
+// SDL_SCANCODE_INSERT
+extern fn sdl2_scancode_insert() -> i32;
+// SDL_SCANCODE_HOME
+extern fn sdl2_scancode_home() -> i32;
+// SDL_SCANCODE_END
+extern fn sdl2_scancode_end() -> i32;
+// SDL_SCANCODE_PAGEUP
+extern fn sdl2_scancode_pageup() -> i32;
+// SDL_SCANCODE_PAGEDOWN
+extern fn sdl2_scancode_pagedown() -> i32;
+// SDL_SCANCODE_CAPSLOCK
+extern fn sdl2_scancode_capslock() -> i32;
+// SDL_BUTTON_LEFT
+extern fn sdl2_button_left() -> i32;
+// SDL_BUTTON_MIDDLE
+extern fn sdl2_button_middle() -> i32;
+// SDL_BUTTON_RIGHT
+extern fn sdl2_button_right() -> i32;
+// SDL_BUTTON_X1
+extern fn sdl2_button_x1() -> i32;
+// SDL_BUTTON_X2
+extern fn sdl2_button_x2() -> i32;
+// SDL_BUTTON_LMASK
+extern fn sdl2_button_lmask() -> i32;
+// SDL_BUTTON_MMASK
+extern fn sdl2_button_mmask() -> i32;
+// SDL_BUTTON_RMASK
+extern fn sdl2_button_rmask() -> i32;
+// SDL_BUTTON_X1MASK
+extern fn sdl2_button_x1mask() -> i32;
+// SDL_BUTTON_X2MASK
+extern fn sdl2_button_x2mask() -> i32;
+
+// SDL_HINT_* names, for sdl2_set_hint / sdl2_get_hint
+extern fn sdl2_hint_render_driver() -> string;
+extern fn sdl2_hint_render_scale_quality() -> string;
+extern fn sdl2_hint_render_vsync() -> string;
+extern fn sdl2_hint_video_minimize_on_focus_lost() -> string;
+extern fn sdl2_hint_video_x11_xrandr() -> string;
+extern fn sdl2_hint_video_window_share_pixel_format() -> string;
+extern fn sdl2_hint_mouse_relative_mode_warp() -> string;
+extern fn sdl2_hint_mouse_focus_clickthrough() -> string;
+extern fn sdl2_hint_windows_dpi_awareness() -> string;
+extern fn sdl2_hint_joystick_hidapi() -> string;

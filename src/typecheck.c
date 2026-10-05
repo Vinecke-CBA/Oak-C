@@ -25,6 +25,11 @@ static Type resolve_type(Comp *c, Type t, int line, int col) {
         *t.elem = resolve_type(c, *t.elem, line, col);
         return t;
     }
+    if (t.kind == TY_PTR && t.elem) {
+        /* ptr<MyStruct> may name a struct declared further down. */
+        *t.elem = resolve_type(c, *t.elem, line, col);
+        return t;
+    }
     const char *n = unresolved_type_name(t);
     if (!n) {
         if (t.kind == TY_STRUCT && t.struct_id >= 0) {
@@ -41,22 +46,107 @@ static Type resolve_type(Comp *c, Type t, int line, int col) {
 }
 
 static bool is_num(Type t) {
-    return t.kind == TY_I32 || t.kind == TY_F64;
+    return type_is_int(t) || type_is_float(t);
 }
 
 static bool is_scalarish(Type t) {
-    return t.kind == TY_I32 || t.kind == TY_F64 || t.kind == TY_BOOL || t.kind == TY_STRING ||
+    return type_is_int(t) || t.kind == TY_F64 || t.kind == TY_BOOL || t.kind == TY_STRING ||
            t.kind == TY_PTR || t.kind == TY_RAW;
 }
 
-/* An i32 literal is accepted wherever an f64 is expected; C does the
-   conversion for us. */
-static bool coerce_int_literal(Expr *e, Type want) {
-    if (want.kind == TY_F64 && e->kind == EX_INT) {
+/* Result type of an integer operation, following C's usual arithmetic
+   conversions: f64 wins outright, then the wider of the two, and a signed
+   type wins over an equally wide unsigned one. */
+static Type int_result(Type a, Type b) {
+    if (type_is_float(a) || type_is_float(b)) {
+        return type_f64();
+    }
+    int64_t alo, ahi, blo, bhi;
+    type_int_bounds(a, &alo, &ahi);
+    type_int_bounds(b, &blo, &bhi);
+    bool asigned = alo < 0;
+    bool bsigned = blo < 0;
+    int awidth = ahi - alo;
+    int bwidth = bhi - blo;
+    if (awidth > bwidth) {
+        return a;
+    }
+    if (bwidth > awidth) {
+        return b;
+    }
+    return asigned ? a : (bsigned ? b : a);
+}
+
+/* An integer literal is accepted wherever a number is expected; C does the
+   conversion for us. A literal too large for the target width is a mistake
+   (`var x: u8 = 300;`), not a silent wrap, so it is rejected. */
+static bool coerce_int_literal(Comp *c, Expr *e, Type want) {
+    if (e->kind != EX_INT) {
+        return false;
+    }
+    if (type_is_float(want)) {
         e->type = type_f64();
         return true;
     }
-    return false;
+    if (!type_is_int(want)) {
+        return false;
+    }
+    if (e->uval > (uint64_t)INT64_MAX) {
+        /* Only an unsigned type can hold a value this large, and only if it is
+           wide enough: 0xFFFFFFFF is fine as u32, not as u16. */
+        uint64_t limit = want.kind == TY_U8    ? UINT8_MAX
+                         : want.kind == TY_U16 ? UINT16_MAX
+                         : want.kind == TY_U32 ? UINT32_MAX
+                                               : (uint64_t)UINT64_MAX;
+        if (want.kind == TY_U64 || e->uval <= limit) {
+            e->type = want;
+            return true;
+        }
+        comp_error(c, e->line, e->col, "literal %llu does not fit in %s",
+                   (unsigned long long)e->uval, type_name(c, want));
+        return true;
+    }
+    int64_t lo, hi;
+    type_int_bounds(want, &lo, &hi);
+    if (e->ival < lo || e->ival > hi) {
+        comp_error(c, e->line, e->col, "literal %lld does not fit in %s", (long long)e->ival,
+                   type_name(c, want));
+        return true; /* keep going with the requested type; the error is already reported */
+    }
+    e->type = want;
+    return true;
+}
+
+/* Anywhere a number is expected, a number of another width is accepted: the
+   generated C performs the usual arithmetic conversion, exactly as it would
+   in hand-written C. Literals are still range-checked first, so
+   `var x: u8 = 300;` stays an error rather than silently wrapping. */
+static bool coerce_num(Comp *c, Expr *e, Type want) {
+    if (!is_num(e->type) || !is_num(want)) {
+        return false;
+    }
+    if (type_eq(e->type, want)) {
+        return true;
+    }
+    if (e->kind == EX_INT && coerce_int_literal(c, e, want)) {
+        return true;
+    }
+    e->type = want;
+    return true;
+}
+
+static int push_sym(Comp *c, const char *name, Type type, bool is_struct_param) {
+    if (c->nsyms == c->capsyms) {
+        c->capsyms = c->capsyms ? c->capsyms * 2 : 32;
+        c->syms = xrealloc(c->syms, (size_t)c->capsyms * sizeof(Sym));
+    }
+    int id = c->nsyms;
+    c->syms[id].name = name;
+    c->syms[id].type = type;
+    c->syms[id].depth = c->scope;
+    c->syms[id].is_struct_param = is_struct_param;
+    c->nsyms++;
+    return id;
 }
 
 static int add_sym(Comp *c, const char *name, Type type, bool is_struct_param, int line, int col) {
@@ -72,17 +162,16 @@ static int add_sym(Comp *c, const char *name, Type type, bool is_struct_param, i
             break;
         }
     }
-    if (c->nsyms == c->capsyms) {
-        c->capsyms = c->capsyms ? c->capsyms * 2 : 32;
-        c->syms = xrealloc(c->syms, (size_t)c->capsyms * sizeof(Sym));
-    }
-    int id = c->nsyms;
-    c->syms[id].name = name;
-    c->syms[id].type = type;
-    c->syms[id].depth = c->scope;
-    c->syms[id].is_struct_param = is_struct_param;
-    c->nsyms++;
-    return id;
+    return push_sym(c, name, type, is_struct_param);
+}
+
+/* For-loop bindings are scoped sugar: each loop rebinds its names in a private
+   scope, so a name reused by a later sibling loop is not a redeclaration. Bind
+   without the same-scope duplicate scan (ids stay globally unique, which the
+   alias pass relies on); duplicate names *within one* pattern are checked by
+   the caller. */
+static int bind_loop_sym(Comp *c, const char *name, Type type) {
+    return push_sym(c, name, type, false);
 }
 
 static int lookup_sym(Comp *c, const char *name) {
@@ -111,6 +200,10 @@ static bool is_place(Expr *e) {
         /* Array elements are writable; string characters are not. */
         return e->index.base && e->index.base->type.kind == TY_ARRAY;
     }
+    if (e->kind == EX_DEREF) {
+        /* defer(p) = v stores through the pointer. */
+        return true;
+    }
     return false;
 }
 
@@ -118,7 +211,15 @@ static void check_expr(Comp *c, Expr *e) {
     e->root_sym = -1;
     switch (e->kind) {
     case EX_INT:
-        e->type = type_i32();
+        /* Literals are i32 while they fit in one, i64 beyond that, and u64 past
+           INT64_MAX (C's rule for undecorated literals, extended the way Oak
+           needs for masks). An annotation or a surrounding operation re-types
+           them. */
+        if (e->uval > (uint64_t)INT64_MAX) {
+            e->type = type_u64();
+        } else {
+            e->type = (e->ival >= INT32_MIN && e->ival <= INT32_MAX) ? type_i32() : type_i64();
+        }
         break;
     case EX_FLOAT:
         e->type = type_f64();
@@ -148,7 +249,7 @@ static void check_expr(Comp *c, Expr *e) {
                 have_elem = true;
                 continue;
             }
-            if (!type_eq(el->type, elem) && !coerce_int_literal(el, elem)) {
+            if (!type_eq(el->type, elem) && !coerce_num(c, el, elem)) {
                 comp_error(c, el->line, el->col, "array elements must all be %s, got %s",
                            type_name(c, elem), type_name(c, el->type));
             }
@@ -281,7 +382,7 @@ static void check_expr(Comp *c, Expr *e) {
             }
             seen[fi] = true;
             if (!type_eq(e->slit.fvals[i]->type, st->fields[fi].type) &&
-                !coerce_int_literal(e->slit.fvals[i], st->fields[fi].type)) {
+                !coerce_num(c, e->slit.fvals[i], st->fields[fi].type)) {
                 comp_error(c, e->slit.fvals[i]->line, e->slit.fvals[i]->col,
                            "type mismatch for field '%s': expected %s, got %s",
                            e->slit.fnames[i], type_name(c, st->fields[fi].type),
@@ -341,7 +442,7 @@ static void check_expr(Comp *c, Expr *e) {
                     if (vt.kind == TY_UNIT) {
                         comp_error(c, e->call.args[1]->line, e->call.args[1]->col,
                                    "cannot push ()");
-                    } else if (!type_eq(vt, *at.elem) && !coerce_int_literal(e->call.args[1], *at.elem)) {
+                    } else if (!type_eq(vt, *at.elem) && !coerce_num(c, e->call.args[1], *at.elem)) {
                         comp_error(c, e->call.args[1]->line, e->call.args[1]->col,
                                    "cannot push %s into %s", type_name(c, vt),
                                    type_name(c, at));
@@ -376,7 +477,7 @@ static void check_expr(Comp *c, Expr *e) {
             check_expr(c, e->call.args[i]);
             if (i < n) {
                 if (!type_eq(e->call.args[i]->type, fn->params[i].type) &&
-                    !coerce_int_literal(e->call.args[i], fn->params[i].type)) {
+                    !coerce_num(c, e->call.args[i], fn->params[i].type)) {
                     comp_error(c, e->call.args[i]->line, e->call.args[i]->col,
                                "argument type mismatch: expected %s, got %s",
                                type_name(c, fn->params[i].type),
@@ -431,22 +532,23 @@ static void check_expr(Comp *c, Expr *e) {
             break;
         }
         if (op == TOK_PERCENT) {
-            if (!type_eq(e->bin.l->type, type_i32()) || !type_eq(e->bin.r->type, type_i32())) {
-                comp_error(c, e->line, e->col, "'%%' requires i32");
-            }
-            e->type = type_i32();
-            break;
-        }
-        if (op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR || op == TOK_SLASH) {
-            if (!is_num(e->bin.l->type) || !is_num(e->bin.r->type)) {
-                comp_error(c, e->line, e->col, "arithmetic needs i32 or f64, got %s and %s",
+            if (!type_is_int(e->bin.l->type) || !type_is_int(e->bin.r->type)) {
+                comp_error(c, e->line, e->col, "'%%' requires integer types, got %s and %s",
                            type_name(c, e->bin.l->type), type_name(c, e->bin.r->type));
                 e->type = type_i32();
                 break;
             }
-            e->type = (e->bin.l->type.kind == TY_F64 || e->bin.r->type.kind == TY_F64)
-                          ? type_f64()
-                          : type_i32();
+            e->type = int_result(e->bin.l->type, e->bin.r->type);
+            break;
+        }
+        if (op == TOK_PLUS || op == TOK_MINUS || op == TOK_STAR || op == TOK_SLASH) {
+            if (!is_num(e->bin.l->type) || !is_num(e->bin.r->type)) {
+                comp_error(c, e->line, e->col, "arithmetic needs numbers, got %s and %s",
+                           type_name(c, e->bin.l->type), type_name(c, e->bin.r->type));
+                e->type = type_i32();
+                break;
+            }
+            e->type = int_result(e->bin.l->type, e->bin.r->type);
             break;
         }
         comp_error(c, e->line, e->col, "unsupported operator");
@@ -462,7 +564,7 @@ static void check_expr(Comp *c, Expr *e) {
             e->type = type_bool();
         } else {
             if (!is_num(e->un.e->type)) {
-                comp_error(c, e->line, e->col, "unary - requires i32 or f64");
+                comp_error(c, e->line, e->col, "unary - requires a number");
                 e->type = type_i32();
             } else {
                 e->type = e->un.e->type;
@@ -470,7 +572,62 @@ static void check_expr(Comp *c, Expr *e) {
         }
         break;
     }
+    case EX_ADDR: {
+        check_expr(c, e->addr.e);
+        if (!is_place(e->addr.e)) {
+            comp_error(c, e->line, e->col, "ptr() needs a place to take the address of");
+        }
+        Type t = e->addr.e->type;
+        if (t.kind == TY_ARRAY) {
+            comp_error(c, e->line, e->col,
+                       "cannot take the address of an array; use ptr(arr[0]) or ptr(arr[1])");
+        } else if (t.kind == TY_UNIT) {
+            comp_error(c, e->line, e->col, "cannot take the address of ()");
+        } else {
+            /* ptr<T> for the declared type of the place, so defer() knows what
+               it would load if the pointer is typed later. */
+            Type *pointee = arena_alloc(&c->arena, sizeof(Type));
+            *pointee = t;
+            e->type = type_ptr_to(pointee);
+        }
+        break;
     }
+    case EX_DEREF: {
+        check_expr(c, e->deref.p);
+        Type pt = e->deref.p->type;
+        if (pt.kind == TY_ARRAY) {
+            comp_error(c, e->line, e->col,
+                       "an array is already a handle to its data; read defer(arr[0]) for an element");
+        } else if (pt.kind != TY_PTR) {
+            comp_error(c, e->line, e->col, "defer() needs a ptr, got %s", type_name(c, pt));
+            e->type = type_i32();
+        } else if (!pt.elem) {
+            comp_error(c, e->line, e->col,
+                       "defer() needs to know what the pointer points at: declare it as ptr<T> (say ptr<i32>), or take the address with ptr(x)");
+            e->type = type_i32();
+        } else if (pt.elem->kind == TY_UNIT) {
+            comp_error(c, e->line, e->col, "defer() on a pointer to () has no value");
+            e->type = type_i32();
+        } else {
+            e->type = *pt.elem;
+        }
+        break;
+    }
+    }
+}
+
+/* Look up a field by name on a resolved struct type; NULL if absent. */
+static Field *struct_field(Comp *c, Type t, const char *name) {
+    if (t.kind != TY_STRUCT || t.struct_id < 0 || t.struct_id >= c->prog.nstructs) {
+        return NULL;
+    }
+    StructDef *st = c->prog.structs[t.struct_id];
+    for (int i = 0; i < st->nfields; i++) {
+        if (st->fields[i].name == name) {
+            return &st->fields[i];
+        }
+    }
+    return NULL;
 }
 
 static void check_stmt(Comp *c, Stmt *s) {
@@ -490,11 +647,18 @@ static void check_stmt(Comp *c, Stmt *s) {
         check_expr(c, s->var.init);
         Type t = s->var.init->type;
         if (has_ann) {
-            if (!type_eq(t, want) && !coerce_int_literal(s->var.init, want)) {
+            if (!type_eq(t, want) && !coerce_num(c, s->var.init, want)) {
                 comp_error(c, s->line, s->col, "variable '%s' is %s but initialised with %s",
                            s->var.name, type_name(c, want), type_name(c, t));
             }
+            /* `var p: ptr = ptr(x);` declares a pointer whose pointee is still
+               known, so defer(p) works; the emitted C type is void * either
+               way. */
             t = want;
+            if (want.kind == TY_PTR && !want.elem && s->var.init->type.kind == TY_PTR &&
+                s->var.init->type.elem) {
+                t = s->var.init->type;
+            }
         }
         if (t.kind == TY_UNIT) {
             comp_error(c, s->line, s->col, "cannot store () in a variable");
@@ -509,7 +673,7 @@ static void check_stmt(Comp *c, Stmt *s) {
             comp_error(c, s->line, s->col, "invalid assignment target");
         }
         if (!type_eq(s->assign.place->type, s->assign.value->type) &&
-            !coerce_int_literal(s->assign.value, s->assign.place->type)) {
+            !coerce_num(c, s->assign.value, s->assign.place->type)) {
             comp_error(c, s->line, s->col, "type mismatch in assignment: %s vs %s",
                        type_name(c, s->assign.place->type),
                        type_name(c, s->assign.value->type));
@@ -532,6 +696,82 @@ static void check_stmt(Comp *c, Stmt *s) {
         }
         check_stmt(c, s->wh.body);
         break;
+    case ST_FORIN: {
+        /* Loop variables live in their own scope so each `for x` rebinds. */
+        int saved_scope = c->scope;
+        c->scope++;
+        bool ok = true;
+        /* Repeated names inside a single pattern are an error. */
+        for (int i = 0; i < s->forin.nnames; i++) {
+            for (int j = i + 1; j < s->forin.nnames; j++) {
+                if (s->forin.names[i] == s->forin.names[j]) {
+                    comp_error(c, s->line, s->col, "duplicate name '%s' in for pattern",
+                               s->forin.names[i]);
+                    ok = false;
+                }
+            }
+        }
+        if (s->forin.is_range) {
+            check_expr(c, s->forin.iter);
+            check_expr(c, s->forin.hi);
+            bool lo_num = is_num(s->forin.iter->type);
+            bool hi_num = is_num(s->forin.hi->type);
+            if (!lo_num || !hi_num) {
+                comp_error(c, s->line, s->col, "for range needs numeric bounds");
+                ok = false;
+            } else if (type_is_float(s->forin.iter->type) != type_is_float(s->forin.hi->type) &&
+                       s->forin.iter->kind != EX_INT && s->forin.hi->kind != EX_INT &&
+                       s->forin.iter->kind != EX_FLOAT && s->forin.hi->kind != EX_FLOAT) {
+                comp_error(c, s->line, s->col, "for range bounds must both be integers or both be f64");
+                ok = false;
+            }
+            if (s->forin.nnames != 1) {
+                comp_error(c, s->line, s->col, "a range binds exactly one name, not [...]");
+                ok = false;
+            }
+            if (ok) {
+                Type bt = s->forin.iter->type.kind == TY_F64 ||
+                                  s->forin.hi->type.kind == TY_F64
+                              ? type_f64()
+                              : type_i32();
+                bind_loop_sym(c, s->forin.names[0], bt);
+            }
+        } else {
+            check_expr(c, s->forin.iter);
+            if (s->forin.iter->type.kind != TY_ARRAY) {
+                comp_error(c, s->line, s->col, "for needs an array or a range, got %s",
+                           type_name(c, s->forin.iter->type));
+                ok = false;
+            } else if (s->forin.nnames == 1) {
+                bind_loop_sym(c, s->forin.names[0], *s->forin.iter->type.elem);
+            } else {
+                Type elem = *s->forin.iter->type.elem;
+                if (elem.kind != TY_STRUCT) {
+                    comp_error(c, s->line, s->col,
+                               "for [a, b, ...] needs an array of structs, got %s",
+                               type_name(c, s->forin.iter->type));
+                    ok = false;
+                } else {
+                    for (int i = 0; i < s->forin.nnames; i++) {
+                        Field *f = struct_field(c, elem, s->forin.names[i]);
+                        if (!f) {
+                            comp_error(c, s->line, s->col, "no field '%s' on %s",
+                                       s->forin.names[i], type_name(c, elem));
+                            ok = false;
+                            break;
+                        }
+                        bind_loop_sym(c, s->forin.names[i], f->type);
+                    }
+                }
+            }
+        }
+        /* Loop names live in this loop's own scope, restored below, so a later
+           sibling loop may reuse the same names. */
+        check_stmt(c, s->forin.body);
+        c->scope = saved_scope;
+        (void)ok;
+        break;
+    }
     case ST_RETURN:
         if (!g_cur_fn) {
             break;
@@ -539,7 +779,7 @@ static void check_stmt(Comp *c, Stmt *s) {
         if (s->ret.value) {
             check_expr(c, s->ret.value);
             if (!type_eq(s->ret.value->type, g_cur_fn->ret) &&
-                !coerce_int_literal(s->ret.value, g_cur_fn->ret)) {
+                !coerce_num(c, s->ret.value, g_cur_fn->ret)) {
                 comp_error(c, s->line, s->col, "return type mismatch: expected %s, got %s",
                            type_name(c, g_cur_fn->ret), type_name(c, s->ret.value->type));
             }
@@ -574,6 +814,8 @@ static bool stmt_has_return(Stmt *s) {
                (s->ifs.else_b && stmt_has_return(s->ifs.else_b));
     case ST_WHILE:
         return stmt_has_return(s->wh.body);
+    case ST_FORIN:
+        return stmt_has_return(s->forin.body);
     case ST_BLOCK:
         for (int i = 0; i < s->block.n; i++) {
             if (stmt_has_return(s->block.stmts[i])) {

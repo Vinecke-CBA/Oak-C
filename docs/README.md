@@ -30,26 +30,54 @@ gcc -std=c99 -Wall -Wextra -O2 -o oakc src/oak.c src/lex.c src/parse.c \
 oakc examples/hello.oak -o hello && ./hello
 ```
 
-Requires a C99 compiler and `gcc` on `PATH`. Works on Linux and Windows
-(MinGW/MSYS2 tested).
+Requires a C99 compiler on `PATH` — `gcc` by default, or `clang`/`cc`, or the
+bundled TinyCC dropped into `dependencies/tcc/` (see `--cc` below). Works on
+Linux and Windows (MinGW/MSYS2 tested).
 
 ## Compiler CLI
 
 ```
-oakc <file.oak> [-o binary] [--emit-c file.c] [--keep-c] [-- <gcc flags...>]
+oakc <file.oak> [-o binary] [--cc name|path] [--config file]
+     [--emit-c file.c] [--keep-c] [--verbose] [-- <cc flags...>]
 ```
 
 - `-o binary` — output executable (default `a.exe` on Windows, `a.out` elsewhere)
+- `--cc name|path` — C compiler to drive: `gcc` (default), `tcc`, `clang`,
+  `cc`, or a path. `tcc` resolves to `dependencies/tcc/tcc.exe` when present,
+  else `tcc` on `PATH`. A bare `clang` on Windows needs its own sysroot, which
+  can be passed after `--`:
+  `--cc clang -- -target x86_64-w64-windows-gnu --sysroot=C:/msys64/mingw64`
+- `--config file` — read settings from `file` instead of `oak.cfg`
 - `--emit-c file.c` — write the generated C to a chosen file and keep it
 - `--keep-c` — keep the temporary `<input>.oak.c`
+- `--verbose` — print the resolved config, compiler and full command line
 - `-l -L -I -D -O -W -f -m -std...` — recognized *before* the input file and
-  forwarded to the `gcc` invocation that links the program
-- `--` — everything after it is forwarded to `gcc` verbatim (link libs,
+  forwarded to the compiler invocation that links the program
+- `--` — everything after it is forwarded to the compiler verbatim (link libs,
   extra `.c` files for shims, include paths)
+- `-I<dir>` is *also* an Oak include path: `include`/`import` names that
+  aren't found next to the file or in the working directory are looked up
+  there, and `include/` (next to the input file, the working directory, or
+  the `oakc` executable) is searched the same way without being asked
 
 The compiler pipeline is: **parse (recursively, per file) → typecheck →
-alias-check → emit C → invoke gcc**. It stops with a non-zero exit code at
-the first phase that produced errors.
+alias-check → emit C → invoke the C compiler**. It stops with a non-zero exit
+code at the first phase that produced errors.
+
+## oak.cfg
+
+Optional project settings, `key = value` per line (`#`/`;` comments). Found
+next to the input file, else in the working directory; `--config` overrides
+discovery and command-line flags override the file.
+
+| Key | Meaning |
+| --- | --- |
+| `cc` | compiler name or path (default `gcc`) |
+| `std` | C standard → `-std=<value>`; `-` omits the flag |
+| `opt` | optimization level → `-O<value>`; `-` omits the flag |
+| `out` | default output path when `-o` is not given |
+| `keep_c` | `true` to keep the generated C |
+| `flags` | extra flags appended to every compile/link line |
 
 ## Repository layout
 
@@ -63,11 +91,17 @@ oak/
 │   ├── typecheck.c type resolution, scoping, semantic checks
 │   ├── alias.c     struct-argument aliasing rule
 │   ├── codegen.c   C emitter + runtime helpers
-│   └── main.c      CLI driver, multi-file imports, gcc invocation
-├── examples/       hello/bump/copy_ok/control_flow/strings/bad_twice
-│                   plus raylib/ (shim + wrapper + demo) and bench/
+│   └── main.c      CLI driver, oak.cfg + compiler selection, imports
+├── examples/       hello/bump/copy_ok/control_flow/strings/features
+│                   for_loops/include_dir/include_extern/struct_arrays
+│                   plus raylib/ sdl2/ (shim + wrapper + demo) and bench/
+├── include/        shared C headers/sources and Oak modules; searched for
+│                   include/import, passed to gcc as -Iinclude
+├── editors/        vscode-oak/ a ready-made VS Code extension (highlighting)
+├── dependencies/   optional drop-in tools (dependencies/tcc/), gitignored
+├── oak.cfg         project defaults: cc / std / opt / out / keep_c / flags
 ├── docs/           this documentation
-├── Makefile        build / clean / test
+├── Makefile        build / clean / test / test-tcc
 └── README.md       quick-start + five minute tour
 ```
 
@@ -75,11 +109,13 @@ oak/
 
 **Works today:** i32/f64/bool/string/ptr, structs, dynamic arrays with
 bounds-checked indexing and negative indices, string indexing and slicing,
+`for` loops over inclusive ranges, arrays and destructured fields,
 functions, multi-file `import`, C FFI (`include`, `extern fn`, raw C types,
-varargs), `print`/`len`/`push` builtins, one aliasing rule for struct
+varargs, `include "x.c" as extern C` / `as Oak`), a shared `include/`
+search folder, `print`/`len`/`push` builtins, one aliasing rule for struct
 arguments. See README.md for the tour and `examples/raylib/` for a full
 wrapper built entirely on public FFI.
 
-**Not in the language:** loops other than `while`, bitwise operators,
-generics, error values, concurrency, destructors/GC (programs leak on
-purpose), namespaces (imports share one flat namespace).
+**Not in the language:** bitwise operators, generics, error values,
+concurrency, destructors/GC (programs leak on purpose), namespaces (imports
+share one flat namespace).

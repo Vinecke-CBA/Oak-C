@@ -1,0 +1,240 @@
+// math.oak - C's libm, wrapped in one file.
+//
+//   import "math.oak";
+//   print(sqrt(2.0));              // 1.41421
+//   print(math_is_nan(0.0 / 0.0)); // true
+//
+// Build: oakc app.oak -o app            (Windows/MinGW: libm is in the CRT)
+//        oakc app.oak -o app -- -lm     (Linux: needed when gcc does not inline)
+//
+// Backend note: the bundled TinyCC's libm is incomplete - these 15 resolve
+// only under gcc/clang (undefined symbol otherwise):
+//     cbrt exp2 expm1 log2 log1p asinh acosh atanh
+//     remainder fdim scalbn ilogb erf erfc tgamma
+// The other 26 work on both backends. If you use cc = tcc and need one of
+// the 15, switch back to gcc or provide your own shim.
+//
+// How this file works: `include "math.h";` puts #include <math.h> into the
+// generated C, and every `extern fn` below re-states the real libm prototype
+// in Oak's spelling (f64 -> double), so the declarations agree and the call
+// goes straight to libm. No .c shim is needed - libm already exists.
+//
+// Everything here lands in the global namespace (Oak has no modules), so:
+//   - the libm names are declared as themselves: use `sqrt(...)` directly and
+//     do NOT redeclare `extern fn sqrt` in your own file (duplicate function);
+//   - helpers that libm has no name for are prefixed `math_`, so they can
+//     never collide with a function you write.
+// Some things C exposes as macros (M_PI, isnan, INFINITY) have no symbol to
+// link against; those are re-created in Oak below.
+
+include "math.h";
+
+// libm, declared straight -------------------------------------------------
+
+// Roots and powers.
+extern fn sqrt(x: f64) -> f64;
+extern fn cbrt(x: f64) -> f64;
+extern fn pow(x: f64, y: f64) -> f64;
+extern fn hypot(x: f64, y: f64) -> f64;
+
+// Exponentials and logarithms.
+extern fn exp(x: f64) -> f64;
+extern fn exp2(x: f64) -> f64;
+extern fn expm1(x: f64) -> f64;
+extern fn log(x: f64) -> f64;
+extern fn log2(x: f64) -> f64;
+extern fn log10(x: f64) -> f64;
+extern fn log1p(x: f64) -> f64;
+
+// Trigonometry (radians).
+extern fn sin(x: f64) -> f64;
+extern fn cos(x: f64) -> f64;
+extern fn tan(x: f64) -> f64;
+extern fn asin(x: f64) -> f64;
+extern fn acos(x: f64) -> f64;
+extern fn atan(x: f64) -> f64;
+extern fn atan2(y: f64, x: f64) -> f64;
+
+// Hyperbolic.
+extern fn sinh(x: f64) -> f64;
+extern fn cosh(x: f64) -> f64;
+extern fn tanh(x: f64) -> f64;
+extern fn asinh(x: f64) -> f64;
+extern fn acosh(x: f64) -> f64;
+extern fn atanh(x: f64) -> f64;
+
+// Rounding and remainder.
+extern fn ceil(x: f64) -> f64;
+extern fn floor(x: f64) -> f64;
+extern fn round(x: f64) -> f64;
+extern fn trunc(x: f64) -> f64;
+extern fn fmod(x: f64, y: f64) -> f64;
+extern fn remainder(x: f64, y: f64) -> f64;
+
+// Magnitude and selection.
+extern fn fabs(x: f64) -> f64;
+extern fn fmin(x: f64, y: f64) -> f64;  // if one is NaN, returns the other
+extern fn fmax(x: f64, y: f64) -> f64;
+extern fn fdim(x: f64, y: f64) -> f64;  // max(x - y, 0)
+extern fn copysign(x: f64, y: f64) -> f64;
+extern fn ldexp(x: f64, e: i32) -> f64; // x * 2^e
+extern fn scalbn(x: f64, n: i32) -> f64;
+extern fn ilogb(x: f64) -> i32;         // binary exponent
+
+// Step and error functions.
+extern fn erf(x: f64) -> f64;
+extern fn erfc(x: f64) -> f64;
+extern fn tgamma(x: f64) -> f64;        // gamma(x), exact for small integers
+
+// Constants ---------------------------------------------------------------
+// C's M_PI and friends are preprocessor macros: there is no function to call,
+// so they are spelled out here instead.
+
+// 3.14159... (pi radians = 180 degrees).
+fn math_pi() -> f64 {
+    return 3.14159265358979323846;
+}
+
+// 6.28318... (one full turn).
+fn math_tau() -> f64 {
+    return 6.28318530717958647692;
+}
+
+// 2.71828... (base of the natural logarithm).
+fn math_e() -> f64 {
+    return 2.71828182845904523536;
+}
+
+// 1.41421... (square root of two).
+fn math_sqrt2() -> f64 {
+    return 1.41421356237309504880;
+}
+
+// Predicates --------------------------------------------------------------
+// isnan/isinf/isfinite are C macros, and a macro has no address to call, so
+// these are the same tricks C itself uses - pure Oak, no libm involved.
+
+fn math_is_nan(x: f64) -> bool {
+    return x != x;  // only NaN is not equal to itself
+}
+
+// Finite means x - x == 0; for infinity that subtraction gives NaN, which
+// never equals zero.
+fn math_is_finite(x: f64) -> bool {
+    return x == x && (x - x) == 0.0;
+}
+
+// Infinite means x - x != 0 while x is still itself (NaN fails the first
+// half, finite numbers fail the second).
+fn math_is_inf(x: f64) -> bool {
+    return x == x && (x - x) != 0.0;
+}
+
+// Integers (libm only speaks doubles) --------------------------------------
+
+fn math_abs_i64(v: i64) -> i64 {
+    if v < 0 {
+        return -v;
+    }
+    return v;
+}
+
+fn math_min_i64(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+fn math_max_i64(a: i64, b: i64) -> i64 {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+
+// Clamp `v` into [lo, hi]. A reversed range returns lo.
+fn math_clamp_i64(v: i64, lo: i64, hi: i64) -> i64 {
+    if lo > hi {
+        return lo;
+    }
+    if v < lo {
+        return lo;
+    }
+    if v > hi {
+        return hi;
+    }
+    return v;
+}
+
+// Greatest common divisor (always >= 0). gcd(0, 0) is 0.
+fn math_gcd(a: i64, b: i64) -> i64 {
+    var x: i64 = math_abs_i64(a);
+    var y: i64 = math_abs_i64(b);
+    while y != 0 {
+        var t: i64 = x % y;
+        x = y;
+        y = t;
+    }
+    return x;
+}
+
+// Least common multiple (always >= 0). lcm(0, 0) is 0.
+fn math_lcm(a: i64, b: i64) -> i64 {
+    if a == 0 || b == 0 {
+        return 0;
+    }
+    return math_abs_i64(a / math_gcd(a, b) * b);
+}
+
+// base^exp for whole numbers: repeated multiplication, so it stays exact for
+// integers that fit. A negative exp gives 0.
+fn math_pow_i64(base: i64, exp: i64) -> i64 {
+    if exp < 0 {
+        return 0;
+    }
+    var result: i64 = 1;
+    var i: i64 = 0;
+    while i < exp {
+        result = result * base;
+        i = i + 1;
+    }
+    return result;
+}
+
+// Floating helpers ---------------------------------------------------------
+
+// -1.0, 0.0 or 1.0 by the sign of x (NaN gives 0.0).
+fn math_sign_f64(x: f64) -> f64 {
+    if x > 0.0 {
+        return 1.0;
+    }
+    if x < 0.0 {
+        return -1.0;
+    }
+    return 0.0;
+}
+
+fn math_clamp_f64(v: f64, lo: f64, hi: f64) -> f64 {
+    if v < lo {
+        return lo;
+    }
+    if v > hi {
+        return hi;
+    }
+    return v;
+}
+
+// Linear interpolation: math_lerp(a, b, 0.0) is a, math_lerp(a, b, 1.0) is b.
+fn math_lerp(a: f64, b: f64, t: f64) -> f64 {
+    return a + (b - a) * t;
+}
+
+// Do a and b agree within `eps`? Use this instead of `==` on computed floats.
+fn math_approx(a: f64, b: f64, eps: f64) -> bool {
+    var d: f64 = a - b;
+    if d < 0.0 {
+        d = -d;
+    }
+    return d <= eps;
+}

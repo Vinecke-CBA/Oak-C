@@ -1,0 +1,21 @@
+// Automated C source linking and cycle-safe Oak module import test
+
+// 1. C source file compiled and linked automatically:
+include "example.c" as extern C;
+
+// 2. Oak module imported safely (example.oak includes include_extern.oak circularly):
+include "example.oak" as Oak;
+
+extern fn add_numbers(a: i32, b: i32) -> i32;
+extern fn printf(fmt: string, ...) -> i32;
+
+fn main() {
+    var sum: i32 = add_numbers(40, 2);
+    printf("sum from C: %d\n", sum);
+
+    var prod: i32 = compute_from_oak(6, 7);
+    printf("prod from Oak module calling C: %d\n", prod);
+
+    
+
+}

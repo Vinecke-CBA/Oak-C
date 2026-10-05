@@ -59,21 +59,69 @@ symbol table (`syms/nsyms/scope/func_sym_base`), import bookkeeping
 
 ### CLI parsing
 
-Recognizes `-o`, `--emit-c`, `--keep-c`, `-h/--help`, and `--` (everything
-after is `passthru`, pushed verbatim). Before the input file, dash-flags
-matching `l L I D O W f m -std*` are also forwarded; anything else errors.
-After input, dash-flags pass through too. Flags are collected with
-`ptrlist_push` into `ccflags`.
+Recognizes `-o`, `--cc`, `--config`, `--emit-c`, `--keep-c`, `--verbose`,
+`-h/--help`, and `--` (everything after is `passthru`, pushed verbatim).
+Before the input file, dash-flags matching `l L I D O W f m -std*` are also
+forwarded; anything else errors. After input, dash-flags pass through too.
+Flags are collected with `ptrlist_push` into `ccflags`.
 
-The gcc line is assembled as:
+### oak.cfg and compiler selection
 
-```c
-snprintf(cmd, ..., "gcc -std=c99 -O2 -o \"%s\" \"%s\"", out_bin, cpath);
-/* then " %s" for each forwarded flag */
-```
+Settings live in a `Cfg` struct (`main.c`), filled in this precedence order:
+built-in defaults → `oak.cfg` → command-line flags. Discovery is
+`--config <file>` (fatal if missing), else `oak.cfg` next to the input file,
+else `oak.cfg` in the working directory. The format is deliberately trivial —
+`key = value` lines, `#`/`;` comments, `flags =` split on whitespace — so it
+needs no parser and no dependency: `trim`, `cfg_set`, `cfg_add_flags`,
+`cfg_load`.
 
-`cpath` = `--emit-c` value or `input + ".c"` (`foo.oak.c`), deleted after
-success unless kept. `system()`'s nonzero status → `gcc failed`.
+`resolve_cc` turns a name into an executable path. A value containing a path
+separator is used as-is; a bare `tcc` prefers `dependencies/tcc/tcc.exe`
+relative to the `oakc` directory (from `argv[0]`) and then the working
+directory, because TCC must find its own `include/` and `lib/` beside the
+executable; anything else is handed to the OS `PATH` lookup.
+
+The command line is built with `cmd_append` (a bounded `vsnprintf` helper)
+rather than a bare `snprintf` chain, and consists of: compiler, `-std=`, `-O`,
+`-o out`, the generated `.c`, then config flags, then the `--` passthrough
+flags (link flags last, since link order matters).
+
+> ⚠ **Windows quoting trap.** `system()` runs `cmd /c <line>`, and cmd strips
+> the first *and last* quote of any line that begins with a quote — so
+> emitting `"gcc" -std=c99 ... "file.c"` becomes `gcc" -std=c99 ... "file.c`
+> and fails. The compiler path is therefore left unquoted unless it contains
+> whitespace; when it does, the whole line is wrapped in one extra pair of
+> quotes (cmd's documented workaround), which the `cc_quoted` flag does.
+
+Two output details worth knowing: `cpath` = the `--emit-c` value or
+`input + ".c"` (`foo.oak.c`), deleted after success unless kept; and on
+Windows the requested output gets `.exe` appended when compiling with TCC
+(which, unlike gcc, does not add it) so that `-o app` is runnable either way.
+`system()`'s nonzero status prints `<compiler> failed`.
+
+### Include search path
+
+Before parsing, the driver fills `Comp.incdirs` with the directories that
+may hold `include`/`import` names not found next to the file or in the
+working directory:
+
+1. `-I<dir>` from the command line and from `flags` in `oak.cfg`
+   (already being forwarded to the C compiler anyway)
+2. `include/` next to the input file
+3. `include/` in the working directory
+4. `include/` next to the `oakc` executable
+
+`add_incdir` records a directory only if it exists and is not already
+listed (deduplicated through `path_canonical`), so a project without an
+`include/` folder behaves exactly as before. The same list is appended to
+the C compiler command as `-I`, because the generated file always sits
+next to the input - never inside `include/`.
+
+Two places consult it, both as a **last resort**: `resolve_include` in
+parse.c (for `include "x.c" as extern C` / `as Oak`) and `parse_file` here
+(for `import`), each through `comp_find_include` in oak.c. The temporary
+per-file `Comp tmp` built below copies `incdirs`, so nested files keep the
+same search path.
 
 ### Recursive import loading
 
@@ -174,8 +222,8 @@ EOL. No block comments, no line continuation.
 `lex_next` dispatches on first char:
 
 - **Identifiers/keywords**: `[A-Za-z_][A-Za-z0-9_]*` → `intern` →
-  `strcmp`-chain maps 17 keywords (`fn struct var if else while return true
-  false i32 f64 bool string ptr null extern import include`); unknown →
+  `strcmp`-chain maps 19 keywords (`fn struct var if else while for in
+  return true false i32 f64 bool string ptr null extern import include`); unknown →
   `TOK_IDENT`. **Adding a keyword = one `else if` here + a `TokKind` in
   oak.h** (see §9) — and it's a breaking change for code using it as a
   variable.
@@ -188,7 +236,8 @@ EOL. No block comments, no line continuation.
   `intern`ed as `TOK_STR.sval`. Identifiers and strings share the intern
   table — `sval`/`ident` pointers are canonical.
 - **Operators/punctuation**: single/multi-char dispatch producing
-  `TOK_ELLIPSIS` (`..` followed by `.` — note `..` alone is *not* valid),
+  `TOK_DOTDOT` (`..`, the inclusive range operator used by `for`) and
+  `TOK_ELLIPSIS` (`...`, extern varargs only),
   `->`, `==`, `!=`, `<=`, `>=`, `&&`, `||`, `.` `[` `]` `(` `)` `{` `}`
   `,` `:` `;` `+ - * / %`. Lone `&`/`|` error out (Oak has no bitwise ops
   or references). Everything else → `unexpected character` + resync.
@@ -284,7 +333,10 @@ recursing, `EX_INDEX` — note parse accepts any index, *typecheck* rejects
 string indexing); `if` / `while` (both wrap conditions with
 `g_no_struct_lit`), `return` [expr] `;` (`s->ret.value` may be NULL),
 `{` block (also reachable as a statement), else expression `;`.
-Blocks: loop `parse_stmt` until `}` (blocks as `if`/`while` bodies go
+`for` is parsed by `parse_for`: a single name or a `[a, b]` destructuring
+pattern, then `in`, then either `expr .. expr` for a range or a bare array
+expression, with `g_no_struct_lit` suppressed across the iterator.
+Blocks: loop `parse_stmt` until `}` (blocks as `if`/`while`/`for` bodies go
 through `parse_block` too).
 
 ## 6. Typechecker (`typecheck.c`)
@@ -366,6 +418,12 @@ annotation to an `EX_ARRAY` initializer, checks the init type, rejects
 types; `ST_IF`/`ST_WHILE` need `bool` conditions; `ST_RETURN` compares
 against `g_cur_fn->ret` (bare `return` in a non-unit function →
 `function must return T`); `ST_BLOCK` bumps and restores `scope`.
+`ST_FORIN` pushes a fresh scope for the loop variable(s), resolves the
+iterator to either an array or a pair of `i32`/`f64` bounds
+(`for range needs i32 or f64 bounds`), checks the binding (destructuring
+needs an array of structs and rejects duplicate names), typechecks the
+body and pops the scope again — so each `for x` rebinds without clobbering
+an outer `x`.
 
 **What codegen may now assume** (typecheck's contract): every expression
 has a final `type`; no negative struct ids remain; every call resolves to
@@ -454,7 +512,9 @@ aliasing rule of §7 exists and why FFI wrappers use `ptr` handles.
 end; array literals → `oak_arr_from(n, sizeof(T), (T[]){...})`; struct
 literals → C99 compound literals `((Point){ .x = 1, .y = 2 })`;
 `len` → `oak_str_len`/`oak_arr_len`; `push(a, v)` → `oak_arr_push(a,
-&(T){ v })`; `print` → `printf("%d\n" | "%g\n" | "%s\n" | "%s\n" with
+&(T){ v })`, except struct elements, where a struct literal pushes as
+`&((T){...})` and an addressable struct value (var/field/slot) as `&(v)`
+— `&(T){ ((T){...}) }` is not valid C. `print` → `printf("%d\n" | "%g\n" | "%s\n" | "%s\n" with
 true/false | "%p\n", ...)`; `string + string` → `oak_str_concat`,
 `==`/`!=` → `oak_str_eq`, ordering → `oak_str_cmp(...) < 0`; everything
 else maps operator-for-operator via `cop()`.
@@ -464,7 +524,12 @@ else maps operator-for-operator via `cop()`.
 → `if (...) { }`, `while` → `while (...) { }`, `return`, expression
 statement, nested block (an explicit `{ }` in Oak emits a literal C block,
 since C99 allows declarations mid-block). `emit_block_inner` unwraps a
-block so `if x { ... }` never double-braces.
+block so `if x { ... }` never double-braces. A `for` lowers to a `while`:
+the bounds are snapshotted into locals once, the loop variable is a
+block-local copy, and array iteration re-reads the length every step and
+loads elements through the bounds-checked accessor — which is why
+`expr_flags` must OR in `F_ARR | F_IDX` for `ST_FORIN`, or the helpers
+would not be emitted.
 
 Because the output is plain, readable, `-O2`-compiled C, the usual
 debugging trick works: `--emit-c out.c`, read/edit it, compile it by hand.
@@ -569,14 +634,17 @@ be respected when modifying):
   programs; a chunked arena is the fix if large inputs ever break
   mysteriously (see §3).
 - **gcc-specific assumptions in generated C**: C99 compound literals,
-  declarations after statements, `//`-free style; the driver hardcodes
-  `gcc -std=c99 -O2`. Clang works as a drop-in `CC`, MSVC would need the
-  command in `main.c` changed.
+  declarations after statements, `//`-free style. The *defaults* are
+  `gcc -std=c99 -O2`, but they are not hardcoded in the driver: `--cc` (or
+  the `cc` key in `oak.cfg`) selects `gcc`/`clang`/`tcc`/a path, and
+  `std`/`opt` supply the rest (`make test-tcc` exercises TinyCC). MSVC
+  would still need the command built in `main.c` changed.
 
 **Testing**
 
-- `make test` compiles and runs every program in `examples/`
-  (hello, bump, copy_ok, control_flow, strings) and asserts that
+- `make test` compiles and runs a curated subset of `examples/`
+  (hello, bump, copy_ok, control_flow, strings, include_extern, for_loops,
+  include_dir) and asserts that
   `bad_twice.oak` (the aliasing error) is *rejected* — the last line is
   prefixed with `-` so a non-zero exit there is success.
 - `gcc -Wall -Wextra` must stay clean; the Makefile already uses it.

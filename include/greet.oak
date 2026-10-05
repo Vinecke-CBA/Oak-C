@@ -1,0 +1,4 @@
+// Lives in include/, reachable from any Oak file in the project.
+fn greet(who: string) -> string {
+    return "hello, " + who;
+}

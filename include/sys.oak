@@ -1,0 +1,23 @@
+include "sys.c" as extern C;
+
+
+extern fn sys_open(path: string, mode: string) -> ptr;
+extern fn sys_fprint(f: ptr, text: string) -> i32;
+extern fn sys_close(f: ptr) -> i32;
+extern fn sys_fread(f: ptr) -> string;
+
+fn sys_file_contents(path: string) -> string {
+    var f: ptr = sys_open(path, "r");
+    if f == null {
+        print("could not open file: ");
+        print(path);
+        return "";
+    }
+    var text: string = sys_fread(f);
+    sys_close(f);
+    return text;
+}
+
+fn main() {}
+
+

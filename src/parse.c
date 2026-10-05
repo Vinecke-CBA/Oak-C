@@ -27,6 +27,7 @@ static Type named_unresolved(const char *name) {
 static Expr *parse_expr(Lexer *l);
 static Stmt *parse_block(Lexer *l);
 static Stmt *parse_stmt(Lexer *l);
+static Type parse_type(Lexer *l);
 
 /* `Name { ... }` is a struct literal, but `if cond { ... }` / `while cond { ... }`
    end a condition with an identifier too. Inside a condition we therefore treat
@@ -74,9 +75,37 @@ static Stmt *new_stmt(Lexer *l, StmtKind k, int line, int col) {
 }
 
 static Type parse_type_atom(Lexer *l) {
+    if (at(l, TOK_I8)) {
+        take(l);
+        return type_i8();
+    }
+    if (at(l, TOK_U8)) {
+        take(l);
+        return type_u8();
+    }
+    if (at(l, TOK_I16)) {
+        take(l);
+        return type_i16();
+    }
+    if (at(l, TOK_U16)) {
+        take(l);
+        return type_u16();
+    }
     if (at(l, TOK_I32)) {
         take(l);
         return type_i32();
+    }
+    if (at(l, TOK_U32)) {
+        take(l);
+        return type_u32();
+    }
+    if (at(l, TOK_I64)) {
+        take(l);
+        return type_i64();
+    }
+    if (at(l, TOK_U64)) {
+        take(l);
+        return type_u64();
     }
     if (at(l, TOK_F64)) {
         take(l);
@@ -92,6 +121,16 @@ static Type parse_type_atom(Lexer *l) {
     }
     if (at(l, TOK_PTR)) {
         take(l);
+        /* `ptr` alone is an untyped pointer (a C `void *`). `ptr<T>` remembers
+           what it points at, which is what makes `defer(p)` typed and lets a C
+           function that hands back a pointer describe what it hands back. */
+        if (at(l, TOK_LT)) {
+            take(l);
+            Type *e = arena_alloc(&l->c->arena, sizeof(Type));
+            *e = parse_type(l);
+            expect(l, TOK_GT, "'>' to close ptr<type>'");
+            return type_ptr_to(e);
+        }
         return type_ptr();
     }
     if (at(l, TOK_IDENT)) {
@@ -162,6 +201,7 @@ static Expr *parse_primary(Lexer *l) {
         take(l);
         Expr *e = new_expr(l, EX_INT, t.line, t.col);
         e->ival = t.ival;
+        e->uval = t.uval;
         return e;
     }
     if (at(l, TOK_FLOAT)) {
@@ -209,6 +249,26 @@ static Expr *parse_primary(Lexer *l) {
         take(l);
         Expr *e = new_expr(l, EX_STRING, t.line, t.col);
         e->sval = t.sval;
+        return e;
+    }
+    /* `ptr(x)` is Oak's address-of: x must be a place (variable, field or
+       array slot). `defer(p)` is its partner: the value stored at p, usable
+       both to read and to assign to. */
+    if (at(l, TOK_PTR) || at(l, TOK_DEREF)) {
+        bool is_addr = at(l, TOK_PTR);
+        Token op = take(l);
+        expect(l, TOK_LPAREN, is_addr ? "'(' after ptr" : "'(' after defer");
+        bool saved = g_no_struct_lit;
+        g_no_struct_lit = false;
+        Expr *inner = parse_expr(l);
+        g_no_struct_lit = saved;
+        expect(l, TOK_RPAREN, "')'");
+        Expr *e = new_expr(l, is_addr ? EX_ADDR : EX_DEREF, op.line, op.col);
+        if (is_addr) {
+            e->addr.e = inner;
+        } else {
+            e->deref.p = inner;
+        }
         return e;
     }
     if (at(l, TOK_IDENT)) {
@@ -359,6 +419,9 @@ static bool is_place(Expr *e) {
     if (e->kind == EX_INDEX) {
         return true; /* typechecker rejects string element stores */
     }
+    if (e->kind == EX_DEREF) {
+        return true; /* defer(p) = v stores through the pointer */
+    }
     return false;
 }
 
@@ -399,6 +462,70 @@ static Stmt *parse_block(Lexer *l) {
     return s;
 }
 
+static Stmt *parse_for(Lexer *l) {
+    Token f = expect(l, TOK_FOR, "'for'");
+    /* Binding pattern: a single name, or [n0, n1, ...] (struct destructuring). */
+    const char **names = NULL;
+    int nnames = 0, cap = 0;
+    if (at(l, TOK_LBRACKET)) {
+        Token lb = take(l);
+        bool saved = g_no_struct_lit;
+        g_no_struct_lit = true;
+        if (!at(l, TOK_RBRACKET)) {
+            for (;;) {
+                Token n = expect(l, TOK_IDENT, "binding name");
+                if (nnames == cap) {
+                    cap = cap ? cap * 2 : 2;
+                    names = xrealloc(names, (size_t)cap * sizeof(char *));
+                }
+                names[nnames++] = n.ident;
+                if (!at(l, TOK_COMMA)) {
+                    break;
+                }
+                take(l);
+                if (at(l, TOK_RBRACKET)) {
+                    break;
+                }
+            }
+        }
+        g_no_struct_lit = saved;
+        expect(l, TOK_RBRACKET, "']'");
+        (void)lb;
+    } else {
+        Token n = expect(l, TOK_IDENT, "loop variable");
+        names = xmalloc(sizeof(char *));
+        names[0] = n.ident;
+        nnames = 1;
+    }
+    if (nnames == 0) {
+        comp_error(l->c, f.line, f.col, "for needs a loop variable");
+    }
+    expect(l, TOK_IN, "'in'");
+    /* The iterable ends at the block, like an if/while condition: identifiers
+       followed by `{` must not become struct literals here. Suppression stays
+       on through the end bound too. */
+    bool saved_iter = g_no_struct_lit;
+    g_no_struct_lit = true;
+    Expr *lo = parse_expr(l);
+    Expr *hi = NULL;
+    bool is_range = false;
+    if (at(l, TOK_DOTDOT)) {
+        take(l);
+        is_range = true;
+        hi = parse_expr(l);
+    }
+    g_no_struct_lit = saved_iter;
+    Stmt *body = parse_block(l);
+    Stmt *s = new_stmt(l, ST_FORIN, f.line, f.col);
+    s->forin.names = names;
+    s->forin.nnames = nnames;
+    s->forin.iter = lo;
+    s->forin.hi = hi;
+    s->forin.body = body;
+    s->forin.is_range = is_range;
+    return s;
+}
+
 static Stmt *parse_stmt(Lexer *l) {
     if (at(l, TOK_VAR)) {
         Token v = take(l);
@@ -435,6 +562,9 @@ static Stmt *parse_stmt(Lexer *l) {
         s->wh.cond = cond;
         s->wh.body = body;
         return s;
+    }
+    if (at(l, TOK_FOR)) {
+        return parse_for(l);
     }
     if (at(l, TOK_RETURN)) {
         Token r = take(l);
@@ -572,6 +702,114 @@ static void add_include(Comp *c, const char *header) {
     ptrlist_push((void ***)&p->includes, &p->nincludes, &p->capincludes, (void *)header);
 }
 
+/* An `include "x.c" as extern C` file is handed to the C compiler on the link
+   line, once, no matter how many files ask for it. Canonicalizing paths
+   ensures deduplication regardless of relative vs absolute spelling. */
+static void add_csrc(Comp *c, const char *path) {
+    char *canon = path_canonical(path);
+    Program *p = &c->prog;
+    for (int i = 0; i < p->ncsrcs; i++) {
+        if (strcmp(p->csrcs[i], canon) == 0) {
+            free(canon);
+            return;
+        }
+    }
+    ptrlist_push((void ***)&p->csrcs, &p->ncsrcs, &p->capcsrcs, (void *)canon);
+}
+
+static bool ends_with(const char *s, const char *suffix) {
+    size_t a = strlen(s), b = strlen(suffix);
+    return a >= b && strcmp(s + a - b, suffix) == 0;
+}
+
+/* Check relative to the file containing the include first, then CWD, then
+   the include search path (-I flags and the default include/ folders).
+   Reports and returns NULL when none of them holds the file. */
+static char *resolve_include(Comp *c, const char *spec, int line, int col, const char *kind) {
+    char *dir = path_dir(c->filename);
+    char *joined = path_join(dir, spec);
+    free(dir);
+    if (file_exists(joined)) {
+        return joined;
+    }
+    free(joined);
+    if (file_exists(spec)) {
+        return xstrdup(spec);
+    }
+    char *found = comp_find_include(c, spec);
+    if (found) {
+        return found;
+    }
+    comp_error(c, line, col, "cannot open '%s' (included as %s, tried include/ too)", spec, kind);
+    return NULL;
+}
+
+static void skip_to_semi(Lexer *l) {
+    while (!at(l, TOK_SEMI) && !at(l, TOK_EOF)) {
+        take(l);
+    }
+    if (at(l, TOK_SEMI)) {
+        take(l);
+    }
+}
+
+/* include "header.h";              -> #include in the generated C (as before)
+   include "file.c" as extern C;    -> compiled and linked automatically
+   include "module.oak" as Oak;     -> exactly like import "module.oak";
+                                       cycles are caught by the driver's
+                                       already-loaded list, so two files that
+                                       include each other terminate. */
+static void parse_include(Lexer *l) {
+    Comp *c = l->c;
+    take(l); /* include */
+    Token s = expect(l, TOK_STR, "file name");
+    if (at(l, TOK_SEMI)) {
+        take(l);
+        add_include(c, s.sval);
+        return;
+    }
+    if (!(at(l, TOK_IDENT) && strcmp(l->tok.ident, "as") == 0)) {
+        comp_error(c, l->tok.line, l->tok.col,
+                   "expected ';' or 'as extern C' / 'as Oak' after the file name");
+        skip_to_semi(l);
+        return;
+    }
+    take(l); /* as */
+    if (at(l, TOK_EXTERN)) {
+        take(l);
+        Token lang = expect(l, TOK_IDENT, "language name after 'extern'");
+        if (strcmp(lang.ident, "C") != 0) {
+            comp_error(c, lang.line, lang.col, "only 'as extern C' is supported, got 'extern %s'",
+                       lang.ident);
+        }
+        expect(l, TOK_SEMI, "';'");
+        if (ends_with(s.sval, ".oak")) {
+            comp_error(c, s.line, s.col,
+                       "'%s' looks like Oak source - use `include \"%s\" as Oak;` instead",
+                       s.sval, s.sval);
+            return;
+        }
+        char *path = resolve_include(c, s.sval, s.line, s.col, "extern C");
+        if (path) {
+            add_csrc(c, path);
+        }
+        return;
+    }
+    if (at(l, TOK_IDENT) && strcmp(l->tok.ident, "Oak") == 0) {
+        take(l);
+        expect(l, TOK_SEMI, "';'");
+        char *path = resolve_include(c, s.sval, s.line, s.col, "Oak");
+        if (path) {
+            /* Same channel as `import`: the driver parses it next and skips
+               files it has already loaded. */
+            ptrlist_push((void ***)&c->imports, &c->nimports, &c->capimports, path);
+        }
+        return;
+    }
+    comp_error(c, l->tok.line, l->tok.col, "expected 'extern C' or 'Oak' after 'as'");
+    skip_to_semi(l);
+}
+
 Program *parse_program(Lexer *l) {
     Program *p = &l->c->prog;
     while (!at(l, TOK_EOF)) {
@@ -595,10 +833,7 @@ Program *parse_program(Lexer *l) {
             ptrlist_push((void ***)&l->c->imports, &l->c->nimports, &l->c->capimports,
                          (void *)path);
         } else if (at(l, TOK_INCLUDE)) {
-            take(l);
-            Token s = expect(l, TOK_STR, "C header name");
-            expect(l, TOK_SEMI, "';'");
-            add_include(l->c, s.sval);
+            parse_include(l);
         } else {
             comp_error(l->c, l->tok.line, l->tok.col,
                        "expected struct, fn, extern fn, import or include");

@@ -1,0 +1,12 @@
+// The shared files all live in the project's include/ folder - none of them
+// are next to this file. See include/README.md for the search order.
+include "shout.h";                 // C header: -Iinclude is added for us
+include "shout.c" as extern C;     // C source: compiled and linked for us
+import "greet.oak";                // Oak module: found in include/
+
+extern fn shout(msg: string);
+
+fn main() {
+    shout("found in include/");
+    print(greet("oak"));
+}

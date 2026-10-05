@@ -1,0 +1,207 @@
+/* sdl2_consts.def — SDL2 constant table for the Oak wrapper.
+ *
+ * X-macro table, included twice: sdl2_shim.h uses it to DECLARE the accessor
+ * functions, sdl2_shim.c uses it to DEFINE them. Values are never hardcoded —
+ * every entry expands to the real SDL2 macro, so the numbers always match the
+ * SDL headers you build against.
+ *
+ *   OAK_SDL_CONST(name, macro)   -> int32_t      sdl2_<name>(void)
+ *   OAK_SDL_HINT(name, macro)    -> const char  *sdl2_<name>(void)
+ *
+ * Cover another constant? Add one line here and one `extern fn` line in
+ * sdl2.oak. That is the whole procedure.
+ */
+
+/* --- SDL_Init flags --- */
+#ifdef OAK_SDL_CONST
+OAK_SDL_CONST(init_timer, SDL_INIT_TIMER)
+OAK_SDL_CONST(init_audio, SDL_INIT_AUDIO)
+OAK_SDL_CONST(init_video, SDL_INIT_VIDEO)
+OAK_SDL_CONST(init_joystick, SDL_INIT_JOYSTICK)
+OAK_SDL_CONST(init_gamecontroller, SDL_INIT_GAMECONTROLLER)
+OAK_SDL_CONST(init_events, SDL_INIT_EVENTS)
+OAK_SDL_CONST(init_sensor, SDL_INIT_SENSOR)
+OAK_SDL_CONST(init_everything, SDL_INIT_EVERYTHING)
+
+/* --- window flags (sdl2_create_window / sdl2_set_window_fullscreen) --- */
+OAK_SDL_CONST(window_fullscreen, SDL_WINDOW_FULLSCREEN)
+OAK_SDL_CONST(window_opengl, SDL_WINDOW_OPENGL)
+OAK_SDL_CONST(window_shown, SDL_WINDOW_SHOWN)
+OAK_SDL_CONST(window_hidden, SDL_WINDOW_HIDDEN)
+OAK_SDL_CONST(window_borderless, SDL_WINDOW_BORDERLESS)
+OAK_SDL_CONST(window_resizable, SDL_WINDOW_RESIZABLE)
+OAK_SDL_CONST(window_minimized, SDL_WINDOW_MINIMIZED)
+OAK_SDL_CONST(window_maximized, SDL_WINDOW_MAXIMIZED)
+OAK_SDL_CONST(window_mouse_grabbed, SDL_WINDOW_MOUSE_GRABBED)
+OAK_SDL_CONST(window_keyboard_grabbed, SDL_WINDOW_KEYBOARD_GRABBED)
+OAK_SDL_CONST(window_input_focus, SDL_WINDOW_INPUT_FOCUS)
+OAK_SDL_CONST(window_mouse_focus, SDL_WINDOW_MOUSE_FOCUS)
+OAK_SDL_CONST(window_fullscreen_desktop, SDL_WINDOW_FULLSCREEN_DESKTOP)
+OAK_SDL_CONST(window_foreign, SDL_WINDOW_FOREIGN)
+OAK_SDL_CONST(window_allow_highdpi, SDL_WINDOW_ALLOW_HIGHDPI)
+OAK_SDL_CONST(window_mouse_capture, SDL_WINDOW_MOUSE_CAPTURE)
+OAK_SDL_CONST(window_always_on_top, SDL_WINDOW_ALWAYS_ON_TOP)
+OAK_SDL_CONST(window_skip_taskbar, SDL_WINDOW_SKIP_TASKBAR)
+OAK_SDL_CONST(window_utility, SDL_WINDOW_UTILITY)
+OAK_SDL_CONST(window_tooltip, SDL_WINDOW_TOOLTIP)
+OAK_SDL_CONST(window_popup_menu, SDL_WINDOW_POPUP_MENU)
+OAK_SDL_CONST(window_vulkan, SDL_WINDOW_VULKAN)
+OAK_SDL_CONST(window_metal, SDL_WINDOW_METAL)
+
+/* --- sdl2_create_window position sentinels --- */
+OAK_SDL_CONST(windowpos_undefined, SDL_WINDOWPOS_UNDEFINED)
+OAK_SDL_CONST(windowpos_centered, SDL_WINDOWPOS_CENTERED)
+
+/* --- sdl2_create_renderer flags --- */
+OAK_SDL_CONST(renderer_software, SDL_RENDERER_SOFTWARE)
+OAK_SDL_CONST(renderer_accelerated, SDL_RENDERER_ACCELERATED)
+OAK_SDL_CONST(renderer_presentvsync, SDL_RENDERER_PRESENTVSYNC)
+OAK_SDL_CONST(renderer_targettexture, SDL_RENDERER_TARGETTEXTURE)
+
+/* --- sdl2_create_texture access (streaming = updatable from the CPU) --- */
+OAK_SDL_CONST(texture_static, SDL_TEXTUREACCESS_STATIC)
+OAK_SDL_CONST(texture_streaming, SDL_TEXTUREACCESS_STREAMING)
+OAK_SDL_CONST(texture_target, SDL_TEXTUREACCESS_TARGET)
+
+/* --- blend modes (sdl2_set_blend_mode / sdl2_set_texture_blend_mode) --- */
+OAK_SDL_CONST(blend_none, SDL_BLENDMODE_NONE)
+OAK_SDL_CONST(blend_blend, SDL_BLENDMODE_BLEND)
+OAK_SDL_CONST(blend_add, SDL_BLENDMODE_ADD)
+OAK_SDL_CONST(blend_mod, SDL_BLENDMODE_MOD)
+OAK_SDL_CONST(blend_mul, SDL_BLENDMODE_MUL)
+
+/* --- sdl2_copy / sdl2_copy_ex flip --- */
+OAK_SDL_CONST(flip_none, SDL_FLIP_NONE)
+OAK_SDL_CONST(flip_horizontal, SDL_FLIP_HORIZONTAL)
+OAK_SDL_CONST(flip_vertical, SDL_FLIP_VERTICAL)
+
+/* --- event types (sdl2_ev_type) --- */
+OAK_SDL_CONST(ev_firstevent, SDL_FIRSTEVENT)
+OAK_SDL_CONST(ev_quit, SDL_QUIT)
+OAK_SDL_CONST(ev_app_terminating, SDL_APP_TERMINATING)
+OAK_SDL_CONST(ev_app_lowmemory, SDL_APP_LOWMEMORY)
+OAK_SDL_CONST(ev_app_will_enter_background, SDL_APP_WILLENTERBACKGROUND)
+OAK_SDL_CONST(ev_app_did_enter_background, SDL_APP_DIDENTERBACKGROUND)
+OAK_SDL_CONST(ev_app_will_enter_foreground, SDL_APP_WILLENTERFOREGROUND)
+OAK_SDL_CONST(ev_app_did_enter_foreground, SDL_APP_DIDENTERFOREGROUND)
+OAK_SDL_CONST(ev_locale_changed, SDL_LOCALECHANGED)
+OAK_SDL_CONST(ev_display, SDL_DISPLAYEVENT)
+OAK_SDL_CONST(ev_window, SDL_WINDOWEVENT)
+OAK_SDL_CONST(ev_syswm, SDL_SYSWMEVENT)
+OAK_SDL_CONST(ev_keydown, SDL_KEYDOWN)
+OAK_SDL_CONST(ev_keyup, SDL_KEYUP)
+OAK_SDL_CONST(ev_text_editing, SDL_TEXTEDITING)
+OAK_SDL_CONST(ev_text_input, SDL_TEXTINPUT)
+OAK_SDL_CONST(ev_keymap_changed, SDL_KEYMAPCHANGED)
+OAK_SDL_CONST(ev_mouse_motion, SDL_MOUSEMOTION)
+OAK_SDL_CONST(ev_mouse_button_down, SDL_MOUSEBUTTONDOWN)
+OAK_SDL_CONST(ev_mouse_button_up, SDL_MOUSEBUTTONUP)
+OAK_SDL_CONST(ev_mouse_wheel, SDL_MOUSEWHEEL)
+OAK_SDL_CONST(ev_joystick_axis_motion, SDL_JOYAXISMOTION)
+OAK_SDL_CONST(ev_joystick_hat_motion, SDL_JOYHATMOTION)
+OAK_SDL_CONST(ev_joystick_button_down, SDL_JOYBUTTONDOWN)
+OAK_SDL_CONST(ev_joystick_button_up, SDL_JOYBUTTONUP)
+OAK_SDL_CONST(ev_joystick_device_added, SDL_JOYDEVICEADDED)
+OAK_SDL_CONST(ev_joystick_device_removed, SDL_JOYDEVICEREMOVED)
+OAK_SDL_CONST(ev_controller_axis_motion, SDL_CONTROLLERAXISMOTION)
+OAK_SDL_CONST(ev_controller_button_down, SDL_CONTROLLERBUTTONDOWN)
+OAK_SDL_CONST(ev_controller_button_up, SDL_CONTROLLERBUTTONUP)
+OAK_SDL_CONST(ev_controller_device_added, SDL_CONTROLLERDEVICEADDED)
+OAK_SDL_CONST(ev_controller_device_removed, SDL_CONTROLLERDEVICEREMOVED)
+OAK_SDL_CONST(ev_finger_down, SDL_FINGERDOWN)
+OAK_SDL_CONST(ev_finger_up, SDL_FINGERUP)
+OAK_SDL_CONST(ev_finger_motion, SDL_FINGERMOTION)
+OAK_SDL_CONST(ev_clipboard_update, SDL_CLIPBOARDUPDATE)
+OAK_SDL_CONST(ev_drop_file, SDL_DROPFILE)
+OAK_SDL_CONST(ev_drop_text, SDL_DROPTEXT)
+OAK_SDL_CONST(ev_drop_begin, SDL_DROPBEGIN)
+OAK_SDL_CONST(ev_drop_complete, SDL_DROPCOMPLETE)
+OAK_SDL_CONST(ev_render_targets_reset, SDL_RENDER_TARGETS_RESET)
+OAK_SDL_CONST(ev_render_device_reset, SDL_RENDER_DEVICE_RESET)
+OAK_SDL_CONST(ev_user, SDL_USEREVENT)
+OAK_SDL_CONST(ev_lastevent, SDL_LASTEVENT)
+
+/* --- SDL_WINDOWEVENT_* (payload of ev_window) --- */
+OAK_SDL_CONST(windowevent_none, SDL_WINDOWEVENT_NONE)
+OAK_SDL_CONST(windowevent_shown, SDL_WINDOWEVENT_SHOWN)
+OAK_SDL_CONST(windowevent_hidden, SDL_WINDOWEVENT_HIDDEN)
+OAK_SDL_CONST(windowevent_exposed, SDL_WINDOWEVENT_EXPOSED)
+OAK_SDL_CONST(windowevent_moved, SDL_WINDOWEVENT_MOVED)
+OAK_SDL_CONST(windowevent_resized, SDL_WINDOWEVENT_RESIZED)
+OAK_SDL_CONST(windowevent_size_changed, SDL_WINDOWEVENT_SIZE_CHANGED)
+OAK_SDL_CONST(windowevent_minimized, SDL_WINDOWEVENT_MINIMIZED)
+OAK_SDL_CONST(windowevent_maximized, SDL_WINDOWEVENT_MAXIMIZED)
+OAK_SDL_CONST(windowevent_restored, SDL_WINDOWEVENT_RESTORED)
+OAK_SDL_CONST(windowevent_enter, SDL_WINDOWEVENT_ENTER)
+OAK_SDL_CONST(windowevent_leave, SDL_WINDOWEVENT_LEAVE)
+OAK_SDL_CONST(windowevent_focus_gained, SDL_WINDOWEVENT_FOCUS_GAINED)
+OAK_SDL_CONST(windowevent_focus_lost, SDL_WINDOWEVENT_FOCUS_LOST)
+OAK_SDL_CONST(windowevent_close, SDL_WINDOWEVENT_CLOSE)
+
+/* --- keyboard modifier bits (sdl2_ev_key_mod) --- */
+OAK_SDL_CONST(keymod_lshift, KMOD_LSHIFT)
+OAK_SDL_CONST(keymod_rshift, KMOD_RSHIFT)
+OAK_SDL_CONST(keymod_lctrl, KMOD_LCTRL)
+OAK_SDL_CONST(keymod_rctrl, KMOD_RCTRL)
+OAK_SDL_CONST(keymod_lalt, KMOD_LALT)
+OAK_SDL_CONST(keymod_ralt, KMOD_RALT)
+OAK_SDL_CONST(keymod_lgui, KMOD_LGUI)
+OAK_SDL_CONST(keymod_rgui, KMOD_RGUI)
+OAK_SDL_CONST(keymod_num, KMOD_NUM)
+OAK_SDL_CONST(keymod_caps, KMOD_CAPS)
+OAK_SDL_CONST(keymod_mode, KMOD_MODE)
+
+/* --- scancodes: physical keys (sdl2_key_down + sdl2_ev_key_scancode).
+       Letters/digits/function keys come from sdl2_scancode_letter/_digit/_key. --- */
+OAK_SDL_CONST(scancode_unknown, SDL_SCANCODE_UNKNOWN)
+OAK_SDL_CONST(scancode_return, SDL_SCANCODE_RETURN)
+OAK_SDL_CONST(scancode_escape, SDL_SCANCODE_ESCAPE)
+OAK_SDL_CONST(scancode_backspace, SDL_SCANCODE_BACKSPACE)
+OAK_SDL_CONST(scancode_tab, SDL_SCANCODE_TAB)
+OAK_SDL_CONST(scancode_space, SDL_SCANCODE_SPACE)
+OAK_SDL_CONST(scancode_right, SDL_SCANCODE_RIGHT)
+OAK_SDL_CONST(scancode_left, SDL_SCANCODE_LEFT)
+OAK_SDL_CONST(scancode_down, SDL_SCANCODE_DOWN)
+OAK_SDL_CONST(scancode_up, SDL_SCANCODE_UP)
+OAK_SDL_CONST(scancode_lctrl, SDL_SCANCODE_LCTRL)
+OAK_SDL_CONST(scancode_lshift, SDL_SCANCODE_LSHIFT)
+OAK_SDL_CONST(scancode_lalt, SDL_SCANCODE_LALT)
+OAK_SDL_CONST(scancode_lgui, SDL_SCANCODE_LGUI)
+OAK_SDL_CONST(scancode_rctrl, SDL_SCANCODE_RCTRL)
+OAK_SDL_CONST(scancode_rshift, SDL_SCANCODE_RSHIFT)
+OAK_SDL_CONST(scancode_delete, SDL_SCANCODE_DELETE)
+OAK_SDL_CONST(scancode_insert, SDL_SCANCODE_INSERT)
+OAK_SDL_CONST(scancode_home, SDL_SCANCODE_HOME)
+OAK_SDL_CONST(scancode_end, SDL_SCANCODE_END)
+OAK_SDL_CONST(scancode_pageup, SDL_SCANCODE_PAGEUP)
+OAK_SDL_CONST(scancode_pagedown, SDL_SCANCODE_PAGEDOWN)
+OAK_SDL_CONST(scancode_capslock, SDL_SCANCODE_CAPSLOCK)
+
+/* --- mouse buttons (sdl2_ev_mouse_button / sdl2_mouse_button_down) --- */
+OAK_SDL_CONST(button_left, SDL_BUTTON_LEFT)
+OAK_SDL_CONST(button_middle, SDL_BUTTON_MIDDLE)
+OAK_SDL_CONST(button_right, SDL_BUTTON_RIGHT)
+OAK_SDL_CONST(button_x1, SDL_BUTTON_X1)
+OAK_SDL_CONST(button_x2, SDL_BUTTON_X2)
+OAK_SDL_CONST(button_lmask, SDL_BUTTON_LMASK)
+OAK_SDL_CONST(button_mmask, SDL_BUTTON_MMASK)
+OAK_SDL_CONST(button_rmask, SDL_BUTTON_RMASK)
+OAK_SDL_CONST(button_x1mask, SDL_BUTTON_X1MASK)
+OAK_SDL_CONST(button_x2mask, SDL_BUTTON_X2MASK)
+#endif
+
+/* --- SDL_HINT_* names (sdl2_set_hint / sdl2_get_hint) --- */
+#ifdef OAK_SDL_HINT
+OAK_SDL_HINT(hint_render_driver, SDL_HINT_RENDER_DRIVER)
+OAK_SDL_HINT(hint_render_scale_quality, SDL_HINT_RENDER_SCALE_QUALITY)
+OAK_SDL_HINT(hint_render_vsync, SDL_HINT_RENDER_VSYNC)
+OAK_SDL_HINT(hint_video_minimize_on_focus_lost, SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS)
+OAK_SDL_HINT(hint_video_x11_xrandr, SDL_HINT_VIDEO_X11_XRANDR)
+OAK_SDL_HINT(hint_video_window_share_pixel_format, SDL_HINT_VIDEO_WINDOW_SHARE_PIXEL_FORMAT)
+OAK_SDL_HINT(hint_mouse_relative_mode_warp, SDL_HINT_MOUSE_RELATIVE_MODE_WARP)
+OAK_SDL_HINT(hint_mouse_focus_clickthrough, SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH)
+OAK_SDL_HINT(hint_windows_dpi_awareness, SDL_HINT_WINDOWS_DPI_AWARENESS)
+OAK_SDL_HINT(hint_joystick_hidapi, SDL_HINT_JOYSTICK_HIDAPI)
+#endif
+
+
